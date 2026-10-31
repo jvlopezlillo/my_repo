@@ -4,6 +4,8 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -70,9 +72,56 @@ class IptvRepository(private val ctx: Context) {
         if (!f.exists()) null else runCatching { json.decodeFromString(chSer, f.readText()) }.getOrNull()
     }
 
+    /** Descarta solo los canales descargados (se vuelven a bajar al abrir la lista). */
+    fun invalidateChannels(id: String) { cacheFile(id).delete() }
+
     fun deleteCache(id: String) {
         cacheFile(id).delete()
         prefs.edit().remove("fav_$id").remove("hid_$id").remove("del_$id").apply()
+    }
+
+    // ── Sincronización remota ──
+    private val tombSer = MapSerializer(String.serializer(), Long.serializer())
+
+    /** Listas borradas en este dispositivo (id → momento), para propagar el borrado al servidor. */
+    fun tombstones(): Map<String, Long> =
+        prefs.getString("tombstones", null)?.let { runCatching { json.decodeFromString(tombSer, it) }.getOrNull() } ?: emptyMap()
+
+    fun saveTombstones(m: Map<String, Long>) {
+        prefs.edit().putString("tombstones", json.encodeToString(tombSer, m)).apply()
+    }
+
+    var syncUrl: String
+        get() = prefs.getString("sync_url", "") ?: ""
+        private set(v) { prefs.edit().putString("sync_url", v).apply() }
+
+    private var syncToken: String?
+        get() = prefs.getString("sync_token", null)
+        set(v) { prefs.edit().putString("sync_token", v).apply() }
+
+    val syncConfigured: Boolean get() = syncUrl.isNotBlank() && syncToken != null
+
+    private fun syncClient(url: String = syncUrl) =
+        SyncClient(baseHttp.newBuilder().callTimeout(30, TimeUnit.SECONDS).build(), url)
+
+    suspend fun syncRegister(url: String): RegisterResponse = withContext(Dispatchers.IO) {
+        val client = syncClient(url)
+        val r = client.register()
+        syncUrl = client.base
+        syncToken = r.token
+        r
+    }
+
+    suspend fun syncNewCode(): CodeResponse = withContext(Dispatchers.IO) {
+        syncClient().newCode(syncToken ?: error("Sin conexión con el servidor"))
+    }
+
+    suspend fun syncExchange(payload: List<RemotePlaylist>): SyncResponse = withContext(Dispatchers.IO) {
+        syncClient().sync(syncToken ?: error("Sin conexión con el servidor"), payload)
+    }
+
+    fun syncDisconnect() {
+        prefs.edit().remove("sync_url").remove("sync_token").remove("tombstones").apply()
     }
 
     /** Grupos ocultos ("hid") o borrados ("del") por lista. */

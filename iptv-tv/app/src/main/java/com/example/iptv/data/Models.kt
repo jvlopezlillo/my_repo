@@ -21,6 +21,7 @@ data class PlaylistConfig(
     val server: String = "",   // Xtream
     val user: String = "",
     val pass: String = "",
+    val updatedAt: Long = 0,   // para fusionar cambios con el servidor de sincronización
 )
 
 const val NO_GROUP = "Sin grupo"

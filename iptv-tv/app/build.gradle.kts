@@ -14,6 +14,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        // URL del servidor de sincronización precargada: gradle assembleDebug -PsyncUrl=https://iptv.midominio.com
+        buildConfigField("String", "DEFAULT_SYNC_URL", "\"${(project.findProperty("syncUrl") as String?) ?: ""}\"")
     }
     buildTypes {
         release { isMinifyEnabled = false }
@@ -23,7 +25,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {

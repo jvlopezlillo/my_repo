@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPTV · Administración</title>
+<style>
+  :root { --bg:#0b1220; --card:#131c31; --line:#25314d; --fg:#e6ebf5; --mut:#93a0bb; --acc:#38bdf8; --err:#ff6b81; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.4rem; } h2 { font-size:1.1rem; margin:0 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin:12px 0; }
+  input, select { width:100%; padding:10px; margin:4px 0 10px; border-radius:8px; border:1px solid var(--line); background:#0e1627; color:var(--fg); font:inherit; }
+  button { padding:9px 14px; border-radius:8px; border:0; background:var(--acc); color:#04121c; font:inherit; font-weight:600; cursor:pointer; }
+  button.sec { background:#26324d; color:var(--fg); } button.del { background:var(--err); color:#2b0510; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .grow { flex:1; min-width:0; }
+  .mut { color:var(--mut); font-size:.85rem; } .err { color:var(--err); min-height:1.3em; }
+  table { width:100%; border-collapse:collapse; } td { padding:8px 4px; border-top:1px solid var(--line); vertical-align:middle; }
+  td.n { word-break:break-all; } dialog { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:12px; width:min(520px,92vw); }
+  dialog::backdrop { background:#000a; }
+</style>
+</head>
+<body>
+<main>
+  <div class="row"><h1 class="grow">IPTV · Administración</h1><button id="logout" class="sec" hidden>Salir</button></div>
+
+  <section id="login" class="card" hidden>
+    <h2>Acceso</h2>
+    <input id="pw" type="password" placeholder="Contraseña de administrador" autocomplete="current-password">
+    <button id="doLogin">Entrar</button>
+    <div class="err" id="loginErr"></div>
+  </section>
+
+  <section id="app" hidden>
+    <div class="card">
+      <h2>Vincular un dispositivo</h2>
+      <p class="mut">En la app: Listas → Sincronización remota. Escribe aquí el código de 6 cifras que muestra.</p>
+      <div class="row">
+        <input id="code" class="grow" inputmode="numeric" maxlength="6" placeholder="Código (6 cifras)">
+        <input id="devName" class="grow" placeholder="Nombre (p. ej. Firestick papá)">
+        <button id="link">Vincular</button>
+      </div>
+      <div class="err" id="linkErr"></div>
+    </div>
+    <div id="devices"></div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <form method="dialog" id="form">
+    <h2 id="dlgTitle">Lista</h2>
+    <label>Nombre<input id="fName" required></label>
+    <label>Tipo<select id="fKind"><option value="M3U">URL M3U</option><option value="XTREAM">Xtream Codes</option></select></label>
+    <div id="m3uF"><label>URL de la lista<input id="fUrl"></label></div>
+    <div id="xtF">
+      <label>Servidor<input id="fServer" placeholder="http://host:puerto"></label>
+      <label>Usuario<input id="fUser"></label>
+      <label>Contraseña<input id="fPass" type="password" autocomplete="new-password"></label>
+      <div class="mut" id="passHint"></div>
+    </div>
+    <div class="err" id="fErr"></div>
+    <div class="row"><button id="fSave" type="button">Guardar</button><button class="sec" value="cancel">Cancelar</button></div>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? {"Content-Type":"application/json"} : {}, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" });
+  if (r.status === 401 && !url.endsWith("/login")) { show(false); throw new Error("Sesión caducada"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Error " + r.status);
+  return j;
+}
+function show(loggedIn) { $("login").hidden = loggedIn; $("app").hidden = !loggedIn; $("logout").hidden = !loggedIn; }
+function el(tag, props = {}, ...kids) { const e = document.createElement(tag); Object.assign(e, props); kids.forEach(k => e.append(k)); return e; }
+const ago = ms => !ms ? "nunca" : new Date(ms).toLocaleString();
+
+async function loadDevices() {
+  const box = $("devices"); box.replaceChildren();
+  const devs = await api("GET", "/admin/api/devices");
+  if (!devs.length) box.append(el("p", { className: "mut", textContent: "Aún no hay dispositivos vinculados." }));
+  for (const d of devs) {
+    const card = el("div", { className: "card" });
+    const head = el("div", { className: "row" },
+      el("div", { className: "grow" }, el("h2", { textContent: d.name }), el("div", { className: "mut", textContent: `${d.playlists} listas · visto: ${ago(d.lastSeen)}` })),
+      el("button", { className: "sec", textContent: "Renombrar", onclick: async () => { const n = prompt("Nuevo nombre", d.name); if (n) { await api("PATCH", `/admin/api/devices/${d.id}`, { name: n }); loadDevices(); } } }),
+      el("button", { className: "sec", textContent: "+ Lista", onclick: () => edit(d.id) }),
+      el("button", { className: "del", textContent: "Desvincular", onclick: async () => { if (confirm(`¿Desvincular "${d.name}"? Se borran sus listas del servidor (la app conserva las suyas).`)) { await api("DELETE", `/admin/api/devices/${d.id}`); loadDevices(); } } }));
+    const table = el("table");
+    const pls = await api("GET", `/admin/api/devices/${d.id}/playlists`);
+    for (const p of pls) {
+      const detail = p.kind === "M3U" ? p.url : `${p.server} · ${p.user}`;
+      table.append(el("tr", {},
+        el("td", { className: "n" }, el("b", { textContent: p.name }), el("div", { className: "mut", textContent: `${p.kind} · ${detail}` })),
+        el("td", { style: "text-align:right;white-space:nowrap" },
+          el("button", { className: "sec", textContent: "Editar", onclick: () => edit(d.id, p) }), " ",
+          el("button", { className: "del", textContent: "Borrar", onclick: async () => { if (confirm(`¿Borrar "${p.name}"?`)) { await api("DELETE", `/admin/api/devices/${d.id}/playlists/${p.id}`); loadDevices(); } } }))));
+    }
+    card.append(head, table); box.append(card);
+  }
+}
+
+let editing = null;
+function toggleKind() { const x = $("fKind").value === "XTREAM"; $("xtF").hidden = !x; $("m3uF").hidden = x; }
+$("fKind").onchange = toggleKind;
+function edit(deviceId, p) {
+  editing = { deviceId, p };
+  $("dlgTitle").textContent = p ? "Editar lista" : "Añadir lista";
+  $("fName").value = p?.name || ""; $("fKind").value = p?.kind || "M3U"; $("fUrl").value = p?.url || "";
+  $("fServer").value = p?.server || ""; $("fUser").value = p?.user || ""; $("fPass").value = ""; $("fErr").textContent = "";
+  $("passHint").textContent = p?.hasPass ? "Deja la contraseña en blanco para conservar la actual." : "";
+  toggleKind(); $("dlg").showModal();
+}
+$("fSave").onclick = async () => {
+  const x = $("fKind").value === "XTREAM", { deviceId, p } = editing;
+  const body = { name: $("fName").value.trim(), kind: $("fKind").value, url: x ? "" : $("fUrl").value, server: x ? $("fServer").value : "", user: x ? $("fUser").value : "" };
+  if (x && ($("fPass").value || !p)) body.password = $("fPass").value;
+  if (!x) body.password = "";
+  try {
+    await api(p ? "PUT" : "POST", `/admin/api/devices/${deviceId}/playlists${p ? "/" + p.id : ""}`, body);
+    $("dlg").close(); loadDevices();
+  } catch (e) { $("fErr").textContent = e.message; }
+};
+$("doLogin").onclick = async () => {
+  try { await api("POST", "/admin/api/login", { password: $("pw").value }); $("pw").value = ""; show(true); loadDevices(); }
+  catch (e) { $("loginErr").textContent = e.message; }
+};
+$("pw").onkeydown = e => { if (e.key === "Enter") $("doLogin").click(); };
+$("logout").onclick = async () => { await api("POST", "/admin/api/logout"); show(false); };
+$("link").onclick = async () => {
+  try { await api("POST", "/admin/api/link", { code: $("code").value.trim(), name: $("devName").value.trim() }); $("code").value = $("devName").value = ""; $("linkErr").textContent = ""; loadDevices(); }
+  catch (e) { $("linkErr").textContent = e.message; }
+};
+api("GET", "/admin/api/devices").then(() => { show(true); loadDevices(); }).catch(() => show(false));
+</script>
+</body>
+</html>

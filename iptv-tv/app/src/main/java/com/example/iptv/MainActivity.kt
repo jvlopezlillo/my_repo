@@ -16,6 +16,7 @@ import com.example.iptv.ui.HomeScreen
 import com.example.iptv.ui.PlayerScreen
 import com.example.iptv.ui.PlaylistsScreen
 import com.example.iptv.ui.ProxyScreen
+import com.example.iptv.ui.SyncScreen
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -32,11 +33,16 @@ class MainActivity : ComponentActivity() {
                         Screen.PLAYER -> PlayerScreen(vm)
                         Screen.GROUPS -> GroupsScreen(vm)
                         Screen.PROXY -> ProxyScreen(vm)
+                        Screen.SYNC -> SyncScreen(vm)
                     }
                 }
                 // Atrás: vuelve a Home desde cualquier pantalla secundaria.
                 BackHandler(enabled = vm.screen != Screen.HOME) {
-                    if (vm.screen == Screen.ADD && vm.active == null) finish() else vm.screen = Screen.HOME
+                    when {
+                        vm.screen == Screen.ADD && vm.active == null && vm.editing == null -> finish()
+                        vm.screen == Screen.SYNC -> vm.screen = if (vm.playlists.isEmpty()) Screen.ADD else Screen.PLAYLISTS
+                        else -> { vm.editing = null; vm.screen = Screen.HOME }
+                    }
                 }
             }
         }

@@ -1,0 +1,21 @@
+[Unit]
+Description=IPTV Sync server
+After=network.target
+
+[Service]
+User=iptvsync
+Group=iptvsync
+WorkingDirectory=/opt/iptv-sync
+EnvironmentFile=/etc/iptv-sync.env
+ExecStart=/opt/iptv-sync/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8787 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+# Endurecimiento básico
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/iptv-sync
+Environment=IPTV_DATA_DIR=/var/lib/iptv-sync
+
+[Install]
+WantedBy=multi-user.target

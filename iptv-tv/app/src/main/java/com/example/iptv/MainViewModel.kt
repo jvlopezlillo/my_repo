@@ -11,10 +11,21 @@ import com.example.iptv.data.Channel
 import com.example.iptv.data.IptvRepository
 import com.example.iptv.data.PlaylistConfig
 import com.example.iptv.data.ProxyConfig
+import com.example.iptv.data.RemotePlaylist
+import com.example.iptv.data.SyncClient
+import com.example.iptv.data.SyncResponse
+import com.example.iptv.data.toConfig
+import com.example.iptv.data.toRemote
+import com.example.iptv.data.Kind
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-enum class Screen { HOME, ADD, PLAYLISTS, PLAYER, GROUPS, PROXY }
+enum class Screen { HOME, ADD, PLAYLISTS, PLAYER, GROUPS, PROXY, SYNC }
 
 const val ALL = "Todos"
 const val FAV = "★ Favoritos"
@@ -56,6 +67,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var proxyTestResult by mutableStateOf<String?>(null)
     var proxyTesting by mutableStateOf(false)
         private set
+    /** Lista que se está editando (null = añadiendo una nueva). */
+    var editing by mutableStateOf<PlaylistConfig?>(null)
+
+    // ── Sincronización remota ──
+    var syncConfigured by mutableStateOf(repo.syncConfigured)
+        private set
+    var syncUrl by mutableStateOf(repo.syncUrl)
+        private set
+    var syncCode by mutableStateOf<String?>(null)
+        private set
+    var syncLinked by mutableStateOf(false)
+        private set
+    var syncDeviceName by mutableStateOf("")
+        private set
+    var syncStatus by mutableStateOf<String?>(null)
+        private set
+    var syncBusy by mutableStateOf(false)
+        private set
+    private var syncJob: Job? = null
+
     var favorites by mutableStateOf<Set<String>>(emptySet())
         private set
 
@@ -85,6 +116,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val id = repo.activeId
         val p = playlists.firstOrNull { it.id == id } ?: playlists.firstOrNull()
         if (p != null) select(p) else screen = Screen.ADD
+        // Sincroniza al abrir y cada 5 minutos mientras la app esté viva.
+        viewModelScope.launch {
+            delay(1500)
+            while (true) {
+                syncNow()
+                delay(5 * 60_000L)
+            }
+        }
     }
 
     fun select(p: PlaylistConfig, forceDownload: Boolean = false) {
@@ -113,21 +152,150 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() = active?.let { select(it, forceDownload = true) }
 
     fun addPlaylist(p: PlaylistConfig) {
-        val full = p.copy(id = UUID.randomUUID().toString())
+        val full = p.copy(id = UUID.randomUUID().toString(), updatedAt = System.currentTimeMillis())
         playlists = playlists + full
         repo.savePlaylists(playlists)
         select(full, forceDownload = true)
+        syncNow()
     }
+
+    fun updatePlaylist(p: PlaylistConfig) {
+        val upd = p.copy(updatedAt = System.currentTimeMillis())
+        val old = playlists.firstOrNull { it.id == upd.id }
+        playlists = playlists.map { if (it.id == upd.id) upd else it }
+        repo.savePlaylists(playlists)
+        editing = null
+        val reload = old == null || !sameConnection(old, upd)
+        if (reload) repo.invalidateChannels(upd.id)
+        if (active?.id == upd.id) {
+            active = upd
+            if (reload) select(upd, forceDownload = true) else screen = Screen.PLAYLISTS
+        } else {
+            screen = Screen.PLAYLISTS
+        }
+        syncNow()
+    }
+
+    private fun sameConnection(a: PlaylistConfig, b: PlaylistConfig) =
+        a.kind == b.kind && a.url == b.url && a.server == b.server && a.user == b.user && a.pass == b.pass
 
     fun deletePlaylist(p: PlaylistConfig) {
         playlists = playlists - p
         repo.savePlaylists(playlists)
         repo.deleteCache(p.id)
+        repo.saveTombstones(repo.tombstones() + (p.id to System.currentTimeMillis()))
         if (active?.id == p.id) {
             active = null
             rawChannels = emptyList()
             favorites = emptySet()
             playlists.firstOrNull()?.let { select(it) } ?: run { screen = Screen.ADD }
+        }
+        syncNow()
+    }
+
+    // ───────────── Sincronización remota ─────────────
+    fun connectSync(url: String) {
+        viewModelScope.launch {
+            syncBusy = true
+            syncStatus = "Conectando…"
+            try {
+                val r = repo.syncRegister(url)
+                syncConfigured = true
+                syncUrl = repo.syncUrl
+                syncCode = r.code
+                syncLinked = false
+                syncStatus = null
+            } catch (e: Exception) {
+                syncStatus = "No se pudo conectar: ${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                syncBusy = false
+            }
+            if (syncConfigured) syncNow()
+        }
+    }
+
+    fun newSyncCode() {
+        viewModelScope.launch {
+            try { syncCode = repo.syncNewCode().code } catch (e: Exception) { syncStatus = "Error: ${e.message}" }
+        }
+    }
+
+    fun disconnectSync() {
+        repo.syncDisconnect()
+        syncConfigured = false
+        syncUrl = ""
+        syncCode = null
+        syncLinked = false
+        syncDeviceName = ""
+        syncStatus = null
+    }
+
+    /** Un solo intercambio a la vez; no hace nada si no hay servidor configurado. */
+    fun syncNow() {
+        if (!syncConfigured || syncJob?.isActive == true) return
+        syncJob = viewModelScope.launch { doSync(0) }
+    }
+
+    private suspend fun doSync(attempt: Int) {
+        syncBusy = true
+        try {
+            val local = playlists
+            val tomb = repo.tombstones()
+            val payload = local.map { it.toRemote() } +
+                tomb.map { (id, t) -> RemotePlaylist(id = id, name = "", kind = "M3U", updatedAt = t, deleted = true) }
+            val resp = repo.syncExchange(payload)
+            // Si hubo cambios locales mientras tanto, se repite en vez de pisarlos.
+            if ((playlists != local || repo.tombstones() != tomb) && attempt < 2) {
+                doSync(attempt + 1)
+                return
+            }
+            applyRemote(resp)
+            syncStatus = "Sincronizado a las " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        } catch (e: SyncClient.Unauthorized) {
+            repo.syncDisconnect()
+            disconnectSync()
+            syncStatus = "El servidor ha desvinculado este dispositivo. Vuelve a conectar."
+        } catch (e: Exception) {
+            syncStatus = "Sin conexión con el servidor: ${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            syncBusy = false
+        }
+    }
+
+    private fun applyRemote(resp: SyncResponse) {
+        syncLinked = resp.linked
+        syncDeviceName = resp.name
+        syncCode = resp.code
+
+        val remoteLive = resp.playlists.filter { !it.deleted }.map { it.toConfig() }
+        val byId = remoteLive.associateBy { it.id }
+        val oldById = playlists.associateBy { it.id }
+        val ordered = playlists.mapNotNull { byId[it.id] } + remoteLive.filter { it.id !in oldById }
+        val removed = oldById.keys - byId.keys
+        val changed = remoteLive.filter { n -> oldById[n.id]?.let { it != n } == true }
+
+        repo.saveTombstones(resp.playlists.filter { it.deleted }.associate { it.id to it.updatedAt })
+        if (ordered == playlists) return
+        playlists = ordered
+        repo.savePlaylists(ordered)
+        removed.forEach { repo.deleteCache(it) }
+        changed.filter { n -> !sameConnection(oldById.getValue(n.id), n) }.forEach { repo.invalidateChannels(it.id) }
+
+        // Con el vídeo en marcha no se cambia de pantalla: la lista se recarga al volver.
+        if (screen == Screen.PLAYER) return
+        val a = active
+        when {
+            a != null && a.id in removed -> {
+                active = null
+                rawChannels = emptyList()
+                favorites = emptySet()
+                playlists.firstOrNull()?.let { select(it) } ?: run { screen = Screen.ADD }
+            }
+            a != null && changed.any { it.id == a.id } -> {
+                val n = byId.getValue(a.id)
+                if (sameConnection(a, n)) active = n else select(n, forceDownload = true)
+            }
+            a == null && playlists.isNotEmpty() -> select(playlists.first())
         }
     }
 

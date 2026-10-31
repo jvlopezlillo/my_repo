@@ -18,12 +18,13 @@ import com.example.iptv.data.PlaylistConfig
 
 @Composable
 fun AddPlaylistScreen(vm: MainViewModel) {
-    var kind by remember { mutableStateOf(Kind.M3U) }
-    var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
-    var server by remember { mutableStateOf("") }
-    var user by remember { mutableStateOf("") }
-    var pass by remember { mutableStateOf("") }
+    val editing = remember { vm.editing }
+    var kind by remember { mutableStateOf(editing?.kind ?: Kind.M3U) }
+    var name by remember { mutableStateOf(editing?.name ?: "") }
+    var url by remember { mutableStateOf(editing?.url ?: "") }
+    var server by remember { mutableStateOf(editing?.server ?: "") }
+    var user by remember { mutableStateOf(editing?.user ?: "") }
+    var pass by remember { mutableStateOf(editing?.pass ?: "") }
 
     val valid = if (kind == Kind.M3U) url.isNotBlank() else server.isNotBlank() && user.isNotBlank() && pass.isNotBlank()
 
@@ -32,7 +33,7 @@ fun AddPlaylistScreen(vm: MainViewModel) {
             .verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Añadir lista", style = MaterialTheme.typography.headlineMedium)
+        Text(if (editing != null) "Editar lista" else "Añadir lista", style = MaterialTheme.typography.headlineMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = { kind = Kind.M3U }) { Text(if (kind == Kind.M3U) "● URL M3U" else "URL M3U") }
             Button(onClick = { kind = Kind.XTREAM }) { Text(if (kind == Kind.XTREAM) "● Xtream Codes" else "Xtream Codes") }
@@ -53,11 +54,17 @@ fun AddPlaylistScreen(vm: MainViewModel) {
             Button(
                 onClick = {
                     val n = name.ifBlank { if (kind == Kind.M3U) "Lista M3U" else "Xtream $user" }
-                    vm.addPlaylist(PlaylistConfig("", n, kind, url.trim(), server.trim(), user.trim(), pass.trim()))
+                    val cfg = PlaylistConfig(editing?.id ?: "", n, kind, url.trim(), server.trim(), user.trim(), pass.trim())
+                    if (editing != null) vm.updatePlaylist(cfg) else vm.addPlaylist(cfg)
                 },
                 enabled = valid && !vm.loading,
-            ) { Text(if (vm.loading) "Descargando…" else "Guardar y cargar") }
-            if (vm.active != null) Button(onClick = { vm.screen = com.example.iptv.Screen.HOME }) { Text("Cancelar") }
+            ) { Text(if (vm.loading) "Descargando…" else if (editing != null) "Guardar" else "Guardar y cargar") }
+            if (vm.active != null || editing != null) {
+                Button(onClick = { vm.editing = null; vm.screen = if (editing != null) com.example.iptv.Screen.PLAYLISTS else com.example.iptv.Screen.HOME }) { Text("Cancelar") }
+            }
+        }
+        if (vm.active == null && editing == null) {
+            Button(onClick = { vm.screen = com.example.iptv.Screen.SYNC }) { Text("Sincronización remota (código)") }
         }
     }
 }

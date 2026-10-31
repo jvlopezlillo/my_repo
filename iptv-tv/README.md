@@ -9,6 +9,7 @@ App de listas IPTV para Android TV y móvil/tablet (mismo APK) (Kotlin + Jetpack
 - Favoritos: toca el corazón de un canal para añadirlo/quitarlo; el primer grupo siempre es «★ Favoritos». En la tele, en reproducción, la tecla Menú o el botón rojo los alterna. Se guardan por lista.
 - Grupos: botón «Grupos» para ocultarlos (reversible) o borrarlos de la lista (persiste al actualizar; se puede restaurar). Por lista.
 - Proxy SOCKS5 (botón «Proxy»): para canales bloqueados por país, el tráfico puede salir por tu VPS (p. ej. Dante). Se aplica por separado a la descarga de listas y al vídeo; incluye botón de prueba que compara la IP directa y la del proxy.
+- Sincronización remota (opcional): gestiona las listas de un dispositivo (p. ej. el Firestick de tu padre) desde una web de administración en tu propio servidor, sin usar la MAC (código de vinculación de 6 cifras). Cambios en los dos sentidos: se pueden editar en el dispositivo y desde la web. Ver [`../iptv-sync-server`](../iptv-sync-server/README.md).
 - Sin EPG (por ahora). Las listas se cachean en local; "Actualizar" las vuelve a descargar.
 
 ## Móvil / tablet
@@ -17,6 +18,9 @@ Mismo APK. En pantallas estrechas los grupos pasan a chips horizontales sobre la
 ## Compilar
 - Android Studio: abrir la carpeta `iptv-tv` y ejecutar `app` en un emulador/dispositivo Android TV.
 - Sin Android Studio: el workflow `.github/workflows/build-iptv-tv.yml` genera el APK debug (pestaña *Actions* → artefacto), que se instala con `adb install`.
+
+## Servidor de sincronización
+El APK puede llevar precargada la dirección de tu servidor: define la variable de repositorio `SYNC_URL` (Settings → Secrets and variables → Actions → Variables) o compila con `-PsyncUrl=https://iptv.tudominio.com`. En el dispositivo: Listas → Sincronización remota → Conectar.
 
 ## Siguientes pasos
 Últimos canales, EPG, selector de pistas de audio/subtítulos, ordenar grupos, VOD/series de Xtream.
