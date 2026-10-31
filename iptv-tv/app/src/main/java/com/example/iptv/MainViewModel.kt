@@ -10,10 +10,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.iptv.data.Channel
 import com.example.iptv.data.IptvRepository
 import com.example.iptv.data.PlaylistConfig
+import com.example.iptv.data.ProxyConfig
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-enum class Screen { HOME, ADD, PLAYLISTS, PLAYER, GROUPS }
+enum class Screen { HOME, ADD, PLAYLISTS, PLAYER, GROUPS, PROXY }
 
 const val ALL = "Todos"
 const val FAV = "★ Favoritos"
@@ -50,6 +51,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
     var selectedGroup by mutableStateOf(ALL)
     var playingIndex by mutableStateOf(0)
+    var proxy by mutableStateOf(repo.proxy)
+        private set
+    var proxyTestResult by mutableStateOf<String?>(null)
+    var proxyTesting by mutableStateOf(false)
+        private set
     var favorites by mutableStateOf<Set<String>>(emptySet())
         private set
 
@@ -130,6 +136,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         playingIndex = index
         screen = Screen.PLAYER
     }
+
+    fun saveProxy(cfg: ProxyConfig) {
+        repo.proxy = cfg
+        proxy = cfg
+    }
+
+    fun testProxy(cfg: ProxyConfig) {
+        viewModelScope.launch {
+            proxyTesting = true
+            proxyTestResult = "Probando…"
+            proxyTestResult = try { repo.testProxy(cfg) } catch (e: Exception) { "Error: ${e.message}" }
+            proxyTesting = false
+        }
+    }
+
+    /** Cliente HTTP para el reproductor (con el proxy si está activado para vídeo). */
+    fun videoClient() = repo.clientFor(video = true)
 
     fun toggleHidden(group: String) {
         val id = active?.id ?: return

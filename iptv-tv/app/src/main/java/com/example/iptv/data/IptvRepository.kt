@@ -13,12 +13,41 @@ import java.util.concurrent.TimeUnit
 class IptvRepository(private val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("iptv", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
-    private val http = OkHttpClient.Builder()
+    private val baseHttp = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
-    private val xtream = XtreamClient(http)
+
+    init { ProxySupport.current = proxy }
+
+    var proxy: ProxyConfig
+        get() = prefs.getString("proxy", null)
+            ?.let { runCatching { json.decodeFromString(ProxyConfig.serializer(), it) }.getOrNull() } ?: ProxyConfig()
+        set(v) {
+            prefs.edit().putString("proxy", json.encodeToString(ProxyConfig.serializer(), v)).apply()
+            ProxySupport.current = v
+        }
+
+    /** Cliente HTTP con el proxy aplicado según el uso (listas o vídeo). */
+    fun clientFor(video: Boolean): OkHttpClient = ProxySupport.apply(baseHttp, proxy, video)
+
+    /** Compara la IP pública directa con la que se ve a través del proxy indicado (sin guardarlo). */
+    suspend fun testProxy(cfg: ProxyConfig): String = withContext(Dispatchers.IO) {
+        ProxySupport.current = cfg
+        try {
+            fun ip(c: OkHttpClient): String = runCatching {
+                c.newBuilder().callTimeout(15, TimeUnit.SECONDS).build()
+                    .newCall(Request.Builder().url("https://api.ipify.org").build())
+                    .execute().use { it.body!!.string().trim() }
+            }.getOrElse { "error (${it.message ?: it.javaClass.simpleName})" }
+            val direct = ip(baseHttp)
+            val via = ip(ProxySupport.apply(baseHttp, cfg.copy(enabled = true, forLists = true, forVideo = true), false))
+            "IP directa: $direct\nIP con proxy: $via"
+        } finally {
+            ProxySupport.current = proxy
+        }
+    }
     private val plSer = ListSerializer(PlaylistConfig.serializer())
     private val chSer = ListSerializer(Channel.serializer())
 
@@ -63,8 +92,9 @@ class IptvRepository(private val ctx: Context) {
 
     /** Descarga la lista (M3U o Xtream), la cachea y la devuelve. */
     suspend fun download(p: PlaylistConfig): List<Channel> = withContext(Dispatchers.IO) {
+        val http = clientFor(video = false)
         val channels = when (p.kind) {
-            Kind.XTREAM -> xtream.loadLive(p)
+            Kind.XTREAM -> XtreamClient(http).loadLive(p)
             Kind.M3U -> {
                 val req = Request.Builder().url(p.url.trim()).header("User-Agent", UA).build()
                 http.newCall(req).execute().use { r ->

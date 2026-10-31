@@ -1,6 +1,8 @@
 package com.example.iptv.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -45,11 +47,16 @@ fun HomeScreen(vm: MainViewModel) {
                 Button(onClick = { vm.refresh() }) { Text("Actualizar") }
                 Button(onClick = { vm.screen = Screen.PLAYLISTS }) { Text("Listas") }
                 Button(onClick = { vm.screen = Screen.GROUPS }) { Text("Grupos") }
+                Button(onClick = { vm.screen = Screen.PROXY }) { Text(if (vm.proxy.enabled) "Proxy ●" else "Proxy") }
             }
             if (compact) {
                 search(Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { actions() }
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { actions() }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     search(Modifier.weight(1f))

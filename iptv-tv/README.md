@@ -8,6 +8,7 @@ App de listas IPTV para Android TV y móvil/tablet (mismo APK) (Kotlin + Jetpack
 - Zapping en reproducción: ↑/↓ (o CH+/CH−) cambia de canal; OK muestra/oculta el banner; Atrás vuelve a la lista.
 - Favoritos: toca el corazón de un canal para añadirlo/quitarlo; el primer grupo siempre es «★ Favoritos». En la tele, en reproducción, la tecla Menú o el botón rojo los alterna. Se guardan por lista.
 - Grupos: botón «Grupos» para ocultarlos (reversible) o borrarlos de la lista (persiste al actualizar; se puede restaurar). Por lista.
+- Proxy SOCKS5 (botón «Proxy»): para canales bloqueados por país, el tráfico puede salir por tu VPS (p. ej. Dante). Se aplica por separado a la descarga de listas y al vídeo; incluye botón de prueba que compara la IP directa y la del proxy.
 - Sin EPG (por ahora). Las listas se cachean en local; "Actualizar" las vuelve a descargar.
 
 ## Móvil / tablet

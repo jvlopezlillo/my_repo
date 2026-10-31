@@ -15,6 +15,7 @@ import com.example.iptv.ui.GroupsScreen
 import com.example.iptv.ui.HomeScreen
 import com.example.iptv.ui.PlayerScreen
 import com.example.iptv.ui.PlaylistsScreen
+import com.example.iptv.ui.ProxyScreen
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -30,6 +31,7 @@ class MainActivity : ComponentActivity() {
                         Screen.PLAYLISTS -> PlaylistsScreen(vm)
                         Screen.PLAYER -> PlayerScreen(vm)
                         Screen.GROUPS -> GroupsScreen(vm)
+                        Screen.PROXY -> ProxyScreen(vm)
                     }
                 }
                 // Atrás: vuelve a Home desde cualquier pantalla secundaria.
