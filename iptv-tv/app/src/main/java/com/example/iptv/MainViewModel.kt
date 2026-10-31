@@ -1,6 +1,7 @@
 package com.example.iptv
 
 import android.app.Application
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +63,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
     var selectedGroup by mutableStateOf(ALL)
     var playingIndex by mutableStateOf(0)
+
+    /** Último canal reproducido: al volver del reproductor el foco regresa a él. */
+    var lastPlayedUrl by mutableStateOf<String?>(null)
+        private set
+
+    /** Posición de la lista de canales; vive aquí para sobrevivir al paso por el reproductor. */
+    val channelListState = LazyListState()
     var proxy by mutableStateOf(repo.proxy)
         private set
     var proxyTestResult by mutableStateOf<String?>(null)
@@ -134,6 +142,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         deletedGroups = repo.groupSet("del", p.id)
         selectedGroup = ALL
         query = ""
+        lastPlayedUrl = null
+        resetScroll()
         error = null
         viewModelScope.launch {
             loading = true
@@ -302,6 +312,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun play(index: Int) {
         queue = visible
         playingIndex = index
+        lastPlayedUrl = queue.getOrNull(index)?.url
         screen = Screen.PLAYER
     }
 
@@ -356,6 +367,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Zapping dentro de la lista visible actual. */
     fun zap(delta: Int) {
         val n = queue.size
-        if (n > 0) playingIndex = ((playingIndex + delta) % n + n) % n
+        if (n > 0) {
+            playingIndex = ((playingIndex + delta) % n + n) % n
+            lastPlayedUrl = queue[playingIndex].url
+        }
+    }
+
+    fun selectGroup(name: String) {
+        query = ""
+        selectedGroup = name
+        resetScroll()
+    }
+
+    fun updateQuery(q: String) {
+        query = q
+        resetScroll()
+    }
+
+    private fun resetScroll() {
+        viewModelScope.launch { channelListState.scrollToItem(0) }
     }
 }
