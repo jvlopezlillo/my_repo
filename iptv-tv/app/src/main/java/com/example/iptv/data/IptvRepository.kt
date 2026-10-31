@@ -43,7 +43,15 @@ class IptvRepository(private val ctx: Context) {
 
     fun deleteCache(id: String) {
         cacheFile(id).delete()
-        prefs.edit().remove("fav_$id").apply()
+        prefs.edit().remove("fav_$id").remove("hid_$id").remove("del_$id").apply()
+    }
+
+    /** Grupos ocultos ("hid") o borrados ("del") por lista. */
+    fun groupSet(kind: String, id: String): Set<String> =
+        prefs.getStringSet("${kind}_$id", emptySet())?.toSet() ?: emptySet()
+
+    fun saveGroupSet(kind: String, id: String, groups: Set<String>) {
+        prefs.edit().putStringSet("${kind}_$id", groups).apply()
     }
 
     /** Favoritos por lista: se guardan las URLs de los canales. */

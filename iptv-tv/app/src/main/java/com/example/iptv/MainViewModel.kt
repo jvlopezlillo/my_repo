@@ -13,7 +13,7 @@ import com.example.iptv.data.PlaylistConfig
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-enum class Screen { HOME, ADD, PLAYLISTS, PLAYER }
+enum class Screen { HOME, ADD, PLAYLISTS, PLAYER, GROUPS }
 
 const val ALL = "Todos"
 const val FAV = "★ Favoritos"
@@ -26,8 +26,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var active by mutableStateOf<PlaylistConfig?>(null)
         private set
-    var channels by mutableStateOf<List<Channel>>(emptyList())
+    /** Lista completa tal como se descargó (la caché no se toca al ocultar/borrar grupos). */
+    private var rawChannels by mutableStateOf<List<Channel>>(emptyList())
+    var hiddenGroups by mutableStateOf<Set<String>>(emptySet())
         private set
+    var deletedGroups by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** Canales que se ven en la app: sin grupos ocultos ni borrados. */
+    val channels by derivedStateOf {
+        rawChannels.filter { it.group !in hiddenGroups && it.group !in deletedGroups }
+    }
+
+    /** Grupos que se pueden gestionar (incluye los ocultos, excluye los borrados). */
+    val managedGroups by derivedStateOf {
+        val counts = LinkedHashMap<String, Int>()
+        rawChannels.forEach { if (it.group !in deletedGroups) counts[it.group] = (counts[it.group] ?: 0) + 1 }
+        counts.toList()
+    }
     var loading by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
@@ -69,6 +85,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         active = p
         repo.activeId = p.id
         favorites = repo.favorites(p.id)
+        hiddenGroups = repo.groupSet("hid", p.id)
+        deletedGroups = repo.groupSet("del", p.id)
         selectedGroup = ALL
         query = ""
         error = null
@@ -76,7 +94,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loading = true
             try {
                 val cached = if (forceDownload) null else repo.cached(p.id)
-                channels = cached ?: repo.download(p)
+                rawChannels = cached ?: repo.download(p)
                 screen = Screen.HOME
             } catch (e: Exception) {
                 error = "No se pudo cargar la lista: ${e.message ?: e.javaClass.simpleName}"
@@ -101,7 +119,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         repo.deleteCache(p.id)
         if (active?.id == p.id) {
             active = null
-            channels = emptyList()
+            rawChannels = emptyList()
             favorites = emptySet()
             playlists.firstOrNull()?.let { select(it) } ?: run { screen = Screen.ADD }
         }
@@ -111,6 +129,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         queue = visible
         playingIndex = index
         screen = Screen.PLAYER
+    }
+
+    fun toggleHidden(group: String) {
+        val id = active?.id ?: return
+        hiddenGroups = if (group in hiddenGroups) hiddenGroups - group else hiddenGroups + group
+        repo.saveGroupSet("hid", id, hiddenGroups)
+        if (selectedGroup == group) selectedGroup = ALL
+    }
+
+    fun deleteGroup(group: String) {
+        val id = active?.id ?: return
+        deletedGroups = deletedGroups + group
+        hiddenGroups = hiddenGroups - group
+        repo.saveGroupSet("del", id, deletedGroups)
+        repo.saveGroupSet("hid", id, hiddenGroups)
+        if (selectedGroup == group) selectedGroup = ALL
+    }
+
+    fun restoreDeleted() {
+        val id = active?.id ?: return
+        deletedGroups = emptySet()
+        repo.saveGroupSet("del", id, deletedGroups)
     }
 
     fun isFavorite(ch: Channel) = ch.url in favorites

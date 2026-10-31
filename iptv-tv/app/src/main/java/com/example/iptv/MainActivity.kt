@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.example.iptv.ui.AddPlaylistScreen
 import com.example.iptv.ui.AppTheme
+import com.example.iptv.ui.GroupsScreen
 import com.example.iptv.ui.HomeScreen
 import com.example.iptv.ui.PlayerScreen
 import com.example.iptv.ui.PlaylistsScreen
@@ -28,6 +29,7 @@ class MainActivity : ComponentActivity() {
                         Screen.ADD -> AddPlaylistScreen(vm)
                         Screen.PLAYLISTS -> PlaylistsScreen(vm)
                         Screen.PLAYER -> PlayerScreen(vm)
+                        Screen.GROUPS -> GroupsScreen(vm)
                     }
                 }
                 // Atrás: vuelve a Home desde cualquier pantalla secundaria.

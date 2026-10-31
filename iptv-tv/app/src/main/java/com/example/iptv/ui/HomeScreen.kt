@@ -44,6 +44,7 @@ fun HomeScreen(vm: MainViewModel) {
             val actions: @Composable () -> Unit = {
                 Button(onClick = { vm.refresh() }) { Text("Actualizar") }
                 Button(onClick = { vm.screen = Screen.PLAYLISTS }) { Text("Listas") }
+                Button(onClick = { vm.screen = Screen.GROUPS }) { Text("Grupos") }
             }
             if (compact) {
                 search(Modifier.fillMaxWidth())
