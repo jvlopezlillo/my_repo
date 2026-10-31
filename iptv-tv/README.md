@@ -19,6 +19,9 @@ Mismo APK. En pantallas estrechas los grupos pasan a chips horizontales sobre la
 - Android Studio: abrir la carpeta `iptv-tv` y ejecutar `app` en un emulador/dispositivo Android TV.
 - Sin Android Studio: el workflow `.github/workflows/build-iptv-tv.yml` genera el APK debug (pestaña *Actions* → artefacto), que se instala con `adb install`.
 
+## Lista precargada
+En el primer arranque, si no hay listas, la app añade una lista M3U por defecto (una sola vez; si la borras no vuelve). Se define al compilar: `-PdefaultPlaylistUrl=https://…/lista.m3u` (vacío = ninguna). Por defecto apunta al gist del proyecto.
+
 ## Servidor de sincronización
 El APK puede llevar precargada la dirección de tu servidor: define la variable de repositorio `SYNC_URL` (Settings → Secrets and variables → Actions → Variables) o compila con `-PsyncUrl=https://iptv.tudominio.com`. En el dispositivo: Listas → Sincronización remota → Conectar.
 

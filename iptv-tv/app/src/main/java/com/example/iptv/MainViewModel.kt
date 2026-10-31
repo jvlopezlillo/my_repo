@@ -121,6 +121,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        // Primer arranque sin listas: precarga la lista por defecto (una sola vez).
+        if (playlists.isNotEmpty()) {
+            repo.defaultSeeded = true
+        } else if (!repo.defaultSeeded && BuildConfig.DEFAULT_PLAYLIST_URL.isNotBlank()) {
+            repo.defaultSeeded = true
+            val seed = PlaylistConfig(
+                id = UUID.randomUUID().toString(), name = "Mi lista", kind = Kind.M3U,
+                url = BuildConfig.DEFAULT_PLAYLIST_URL, updatedAt = System.currentTimeMillis(),
+            )
+            playlists = listOf(seed)
+            repo.savePlaylists(playlists)
+        }
         val id = repo.activeId
         val p = playlists.firstOrNull { it.id == id } ?: playlists.firstOrNull()
         if (p != null) select(p) else screen = Screen.ADD

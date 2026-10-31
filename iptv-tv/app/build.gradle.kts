@@ -15,6 +15,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         // URL del servidor de sincronización precargada: gradle assembleDebug -PsyncUrl=https://iptv.midominio.com
+        // Lista M3U precargada en el primer arranque (se puede cambiar con -PdefaultPlaylistUrl=...; vacío = ninguna)
+        buildConfigField(
+            "String", "DEFAULT_PLAYLIST_URL",
+            "\"${(project.findProperty("defaultPlaylistUrl") as String?) ?: "https://gist.githubusercontent.com/jvlopezlillo/2390468a78233293c9ce2294b72fcd2d/raw/lista.m3u"}\"",
+        )
         buildConfigField("String", "DEFAULT_SYNC_URL", "\"${(project.findProperty("syncUrl") as String?) ?: ""}\"")
     }
     buildTypes {

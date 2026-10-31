@@ -80,6 +80,11 @@ class IptvRepository(private val ctx: Context) {
         prefs.edit().remove("fav_$id").remove("hid_$id").remove("del_$id").apply()
     }
 
+    /** true cuando ya se intentó precargar la lista por defecto (para no volver a añadirla si la borras). */
+    var defaultSeeded: Boolean
+        get() = prefs.getBoolean("default_seeded", false)
+        set(v) { prefs.edit().putBoolean("default_seeded", v).apply() }
+
     // ── Sincronización remota ──
     private val tombSer = MapSerializer(String.serializer(), Long.serializer())
 
