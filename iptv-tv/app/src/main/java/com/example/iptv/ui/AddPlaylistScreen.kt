@@ -1,6 +1,8 @@
 package com.example.iptv.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +30,8 @@ fun AddPlaylistScreen(vm: MainViewModel) {
     val valid = if (kind == Kind.M3U) url.isNotBlank() else server.isNotBlank() && user.isNotBlank() && pass.isNotBlank()
 
     Column(
-        Modifier.fillMaxSize().padding(48.dp).widthIn(max = 720.dp),
+        Modifier.fillMaxSize().padding(if (isTv()) 48.dp else 20.dp).widthIn(max = 720.dp)
+            .verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Añadir lista", style = MaterialTheme.typography.headlineMedium)

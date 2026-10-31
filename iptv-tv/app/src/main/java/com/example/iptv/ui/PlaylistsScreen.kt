@@ -17,7 +17,7 @@ import com.example.iptv.Screen
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlaylistsScreen(vm: MainViewModel) {
-    Column(Modifier.fillMaxSize().padding(48.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().padding(if (isTv()) 48.dp else 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Mis listas", style = MaterialTheme.typography.headlineMedium)
         Button(onClick = { vm.error = null; vm.screen = Screen.ADD }) { Text("+ Añadir lista") }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {

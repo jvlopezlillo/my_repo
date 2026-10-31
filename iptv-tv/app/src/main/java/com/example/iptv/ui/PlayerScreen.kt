@@ -10,7 +10,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.tv.material3.Button
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -38,6 +42,7 @@ fun PlayerScreen(vm: MainViewModel) {
     var error by remember { mutableStateOf<String?>(null) }
     var overlay by remember { mutableStateOf(true) }
     val focus = remember { FocusRequester() }
+    val tv = isTv()
 
     val player = remember {
         val http = DefaultHttpDataSource.Factory().setUserAgent(UA).setAllowCrossProtocolRedirects(true)
@@ -63,6 +68,18 @@ fun PlayerScreen(vm: MainViewModel) {
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
+            // Táctil: tocar muestra/oculta el banner; deslizar arriba/abajo cambia de canal.
+            .pointerInput(Unit) { detectTapGestures(onTap = { overlay = !overlay }) }
+            .pointerInput(Unit) {
+                var acc = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { acc = 0f },
+                    onVerticalDrag = { _, dy -> acc += dy },
+                    onDragEnd = {
+                        if (acc < -120f) vm.zap(+1) else if (acc > 120f) vm.zap(-1)
+                    },
+                )
+            }
             .focusRequester(focus).focusable()
             .onKeyEvent { ev ->
                 if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
@@ -92,6 +109,13 @@ fun PlayerScreen(vm: MainViewModel) {
                 Text("${vm.playingIndex + 1}. ${channel.name}", style = MaterialTheme.typography.headlineSmall)
                 Text(channel.group, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (!tv) {
+                    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { vm.zap(-1) }) { Text("◀ Anterior") }
+                        Button(onClick = { vm.zap(+1) }) { Text("Siguiente ▶") }
+                        Button(onClick = { vm.screen = com.example.iptv.Screen.HOME }) { Text("Lista") }
+                    }
+                }
             }
         }
     }
