@@ -1,0 +1,62 @@
+package com.example.iptv.ui
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Text
+import com.example.iptv.MainViewModel
+import com.example.iptv.data.Kind
+import com.example.iptv.data.PlaylistConfig
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun AddPlaylistScreen(vm: MainViewModel) {
+    var kind by remember { mutableStateOf(Kind.M3U) }
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    var server by remember { mutableStateOf("") }
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+
+    val valid = if (kind == Kind.M3U) url.isNotBlank() else server.isNotBlank() && user.isNotBlank() && pass.isNotBlank()
+
+    Column(
+        Modifier.fillMaxSize().padding(48.dp).widthIn(max = 720.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Añadir lista", style = MaterialTheme.typography.headlineMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { kind = Kind.M3U }) { Text(if (kind == Kind.M3U) "● URL M3U" else "URL M3U") }
+            Button(onClick = { kind = Kind.XTREAM }) { Text(if (kind == Kind.XTREAM) "● Xtream Codes" else "Xtream Codes") }
+        }
+        OutlinedTextField(name, { name = it }, label = { Text("Nombre (opcional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (kind == Kind.M3U) {
+            OutlinedTextField(url, { url = it }, label = { Text("URL de la lista M3U") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        } else {
+            OutlinedTextField(server, { server = it }, label = { Text("Servidor (http://host:puerto)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(user, { user = it }, label = { Text("Usuario") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                pass, { pass = it }, label = { Text("Contraseña") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        vm.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = {
+                    val n = name.ifBlank { if (kind == Kind.M3U) "Lista M3U" else "Xtream $user" }
+                    vm.addPlaylist(PlaylistConfig("", n, kind, url.trim(), server.trim(), user.trim(), pass.trim()))
+                },
+                enabled = valid && !vm.loading,
+            ) { Text(if (vm.loading) "Descargando…" else "Guardar y cargar") }
+            if (vm.active != null) Button(onClick = { vm.screen = com.example.iptv.Screen.HOME }) { Text("Cancelar") }
+        }
+    }
+}
