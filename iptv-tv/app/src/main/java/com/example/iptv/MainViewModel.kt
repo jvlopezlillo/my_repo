@@ -16,6 +16,7 @@ import java.util.UUID
 enum class Screen { HOME, ADD, PLAYLISTS, PLAYER }
 
 const val ALL = "Todos"
+const val FAV = "★ Favoritos"
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = IptvRepository(app)
@@ -33,12 +34,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
     var selectedGroup by mutableStateOf(ALL)
     var playingIndex by mutableStateOf(0)
+    var favorites by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** Lista sobre la que se hace zapping: copia de la lista visible al empezar a reproducir. */
+    var queue by mutableStateOf<List<Channel>>(emptyList())
+        private set
 
     /** Grupos en el orden en que aparecen en la lista, con su número de canales. */
     val groups by derivedStateOf {
         val counts = LinkedHashMap<String, Int>()
         channels.forEach { counts[it.group] = (counts[it.group] ?: 0) + 1 }
-        listOf(ALL to channels.size) + counts.toList()
+        listOf(FAV to channels.count { it.url in favorites }, ALL to channels.size) + counts.toList()
     }
 
     /** Canales visibles: la búsqueda tiene prioridad sobre el grupo seleccionado. */
@@ -47,6 +54,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when {
             q.isNotEmpty() -> channels.filter { it.name.contains(q, ignoreCase = true) }
             selectedGroup == ALL -> channels
+            selectedGroup == FAV -> channels.filter { it.url in favorites }
             else -> channels.filter { it.group == selectedGroup }
         }
     }
@@ -60,6 +68,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun select(p: PlaylistConfig, forceDownload: Boolean = false) {
         active = p
         repo.activeId = p.id
+        favorites = repo.favorites(p.id)
         selectedGroup = ALL
         query = ""
         error = null
@@ -93,15 +102,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (active?.id == p.id) {
             active = null
             channels = emptyList()
+            favorites = emptySet()
             playlists.firstOrNull()?.let { select(it) } ?: run { screen = Screen.ADD }
         }
     }
 
-    fun play(index: Int) { playingIndex = index; screen = Screen.PLAYER }
+    fun play(index: Int) {
+        queue = visible
+        playingIndex = index
+        screen = Screen.PLAYER
+    }
+
+    fun isFavorite(ch: Channel) = ch.url in favorites
+
+    /** Añade o quita un canal de favoritos (se guarda al instante). */
+    fun toggleFavorite(ch: Channel) {
+        val id = active?.id ?: return
+        favorites = if (ch.url in favorites) favorites - ch.url else favorites + ch.url
+        repo.saveFavorites(id, favorites)
+    }
 
     /** Zapping dentro de la lista visible actual. */
     fun zap(delta: Int) {
-        val n = visible.size
+        val n = queue.size
         if (n > 0) playingIndex = ((playingIndex + delta) % n + n) % n
     }
 }

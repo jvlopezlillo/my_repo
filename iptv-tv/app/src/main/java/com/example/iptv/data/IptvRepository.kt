@@ -41,7 +41,17 @@ class IptvRepository(private val ctx: Context) {
         if (!f.exists()) null else runCatching { json.decodeFromString(chSer, f.readText()) }.getOrNull()
     }
 
-    fun deleteCache(id: String) { cacheFile(id).delete() }
+    fun deleteCache(id: String) {
+        cacheFile(id).delete()
+        prefs.edit().remove("fav_$id").apply()
+    }
+
+    /** Favoritos por lista: se guardan las URLs de los canales. */
+    fun favorites(id: String): Set<String> = prefs.getStringSet("fav_$id", emptySet())?.toSet() ?: emptySet()
+
+    fun saveFavorites(id: String, urls: Set<String>) {
+        prefs.edit().putStringSet("fav_$id", urls).apply()
+    }
 
     /** Descarga la lista (M3U o Xtream), la cachea y la devuelve. */
     suspend fun download(p: PlaylistConfig): List<Channel> = withContext(Dispatchers.IO) {

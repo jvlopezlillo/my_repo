@@ -18,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import coil.compose.AsyncImage
+import com.example.iptv.FAV
 import com.example.iptv.MainViewModel
 import com.example.iptv.Screen
 
@@ -112,7 +113,13 @@ private fun ChannelList(vm: MainViewModel, modifier: Modifier) {
     val list = vm.visible
     if (list.isEmpty()) {
         Box(modifier, contentAlignment = Alignment.Center) {
-            Text(if (vm.query.isBlank()) "Sin canales" else "Sin resultados para \"${vm.query}\"")
+            Text(
+                when {
+                    vm.query.isNotBlank() -> "Sin resultados para \"${vm.query}\""
+                    vm.selectedGroup == FAV -> "Aún no tienes favoritos.\nToca ♡ en un canal para añadirlo."
+                    else -> "Sin canales"
+                },
+            )
         }
         return
     }
@@ -121,6 +128,7 @@ private fun ChannelList(vm: MainViewModel, modifier: Modifier) {
             ItemRow(
                 selected = false,
                 onClick = { vm.play(i) },
+                trailing = { FavoriteButton(vm.isFavorite(ch), { vm.toggleFavorite(ch) }) },
                 leading = {
                     AsyncImage(
                         model = ch.logo,

@@ -34,7 +34,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun PlayerScreen(vm: MainViewModel) {
     val ctx = LocalContext.current
-    val list = vm.visible
+    val list = vm.queue
     val channel = list.getOrNull(vm.playingIndex) ?: run { vm.screen = com.example.iptv.Screen.HOME; return }
 
     var error by remember { mutableStateOf<String?>(null) }
@@ -84,6 +84,7 @@ fun PlayerScreen(vm: MainViewModel) {
                 when (ev.key) {
                     Key.DirectionUp, Key.ChannelUp -> { vm.zap(+1); true }
                     Key.DirectionDown, Key.ChannelDown -> { vm.zap(-1); true }
+                    Key.Menu, Key.ProgramRed -> { vm.toggleFavorite(channel); overlay = true; true }
                     Key.DirectionCenter, Key.Enter, Key.DirectionRight, Key.DirectionLeft -> { overlay = !overlay; true }
                     else -> false
                 }
@@ -104,8 +105,13 @@ fun PlayerScreen(vm: MainViewModel) {
                 Modifier.align(Alignment.BottomStart).fillMaxWidth()
                     .background(Color(0xCC000000)).padding(horizontal = 40.dp, vertical = 24.dp),
             ) {
-                Text("${vm.playingIndex + 1}. ${channel.name}", style = MaterialTheme.typography.headlineSmall)
-                Text(channel.group, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${vm.playingIndex + 1}. ${channel.name}", style = MaterialTheme.typography.headlineSmall)
+                        Text(channel.group, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    FavoriteButton(vm.isFavorite(channel), { vm.toggleFavorite(channel) })
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!tv) {
                     Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
