@@ -1,0 +1,6 @@
+# Resultados de la Fase 0 (capturas, informe con IPs) y configuración local con datos personales
+phase0/out/
+config.local.*
+.env
+__pycache__/
+.venv/
