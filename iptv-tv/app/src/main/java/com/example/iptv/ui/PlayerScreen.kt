@@ -14,7 +14,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.tv.material3.Button
+import androidx.compose.material3.Button
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -25,14 +25,12 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import com.example.iptv.MainViewModel
 import com.example.iptv.data.UA
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlayerScreen(vm: MainViewModel) {
     val ctx = LocalContext.current

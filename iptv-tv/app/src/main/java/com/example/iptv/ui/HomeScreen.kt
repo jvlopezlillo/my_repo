@@ -14,16 +14,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.ListItem
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import coil.compose.AsyncImage
 import com.example.iptv.MainViewModel
 import com.example.iptv.Screen
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HomeScreen(vm: MainViewModel) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -97,22 +94,19 @@ private fun GroupChips(vm: MainViewModel) {
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun GroupList(vm: MainViewModel, modifier: Modifier) {
     LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         itemsIndexed(vm.groups, key = { i, g -> "$i-${g.first}" }) { _, (name, count) ->
-            ListItem(
+            ItemRow(
                 selected = vm.query.isBlank() && vm.selectedGroup == name,
                 onClick = { vm.query = ""; vm.selectedGroup = name },
-                headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                trailingContent = { Text("$count") },
-            )
+                trailing = { Text("$count") },
+            ) { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun ChannelList(vm: MainViewModel, modifier: Modifier) {
     val list = vm.visible
@@ -124,12 +118,10 @@ private fun ChannelList(vm: MainViewModel, modifier: Modifier) {
     }
     LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         itemsIndexed(list, key = { i, c -> "$i-${c.url}" }) { i, ch ->
-            ListItem(
+            ItemRow(
                 selected = false,
                 onClick = { vm.play(i) },
-                headlineContent = { Text(ch.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                supportingContent = if (vm.query.isNotBlank()) ({ Text(ch.group, maxLines = 1) }) else null,
-                leadingContent = {
+                leading = {
                     AsyncImage(
                         model = ch.logo,
                         contentDescription = null,
@@ -137,7 +129,13 @@ private fun ChannelList(vm: MainViewModel, modifier: Modifier) {
                         modifier = Modifier.size(width = 56.dp, height = 40.dp).clip(RoundedCornerShape(4.dp)),
                     )
                 },
-            )
+            ) {
+                Text(ch.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (vm.query.isNotBlank()) {
+                    Text(ch.group, maxLines = 1, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }

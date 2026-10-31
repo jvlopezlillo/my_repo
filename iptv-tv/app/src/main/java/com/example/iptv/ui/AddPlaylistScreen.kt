@@ -9,15 +9,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import com.example.iptv.MainViewModel
 import com.example.iptv.data.Kind
 import com.example.iptv.data.PlaylistConfig
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun AddPlaylistScreen(vm: MainViewModel) {
     var kind by remember { mutableStateOf(Kind.M3U) }
