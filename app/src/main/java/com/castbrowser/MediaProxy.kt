@@ -109,6 +109,9 @@ class MediaProxy(
     /** Último error HTTP (4xx/5xx) que devolvió la web del vídeo. */
     @Volatile var lastUpstreamError: Int? = null
 
+    /** Peticiones correctas ya registradas (sólo apuntamos las primeras). */
+    @Volatile var okLogged = 0
+
     /** Registro de peticiones (para el diagnóstico). */
     @Volatile var log: (String) -> Unit = {}
 
@@ -191,7 +194,9 @@ class MediaProxy(
         }
         if (code >= 400) lastUpstreamError = code
         val shortTarget = target.substringBefore('?').let { t -> if (t.length > 90) "…" + t.takeLast(89) else t }
-        log("Proxy: TV pide $shortTarget${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code")
+        if (code >= 400 || okLogged++ < 6) {
+            log("Proxy: TV pide $shortTarget${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code")
+        }
         val stream: InputStream? = try {
             if (code >= 400) conn.errorStream else conn.inputStream
         } catch (_: Exception) { null }

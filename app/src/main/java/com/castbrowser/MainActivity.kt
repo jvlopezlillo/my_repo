@@ -651,6 +651,7 @@ class MainActivity : Activity() {
                 val fmp4 = cand.kind == "hls" && detectFmp4(cand.url, headers)
                 if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
                 proxy?.lastUpstreamError = null
+                proxy?.okLogged = 0
                 var error: Exception? = null
                 var ok = false
                 for (useProxy in order) {
@@ -859,9 +860,12 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Diagnóstico")
             .setView(scroll)
-            .setPositiveButton("Copiar") { _, _ ->
+            .setPositiveButton("Copiar último intento") { _, _ ->
+                // Sólo desde el último "────": así cabe en el chat.
+                val i = text.lastIndexOf("────")
+                val last = if (i >= 0) text.substring(text.lastIndexOf('\n', i) + 1) else text
                 getSystemService(android.content.ClipboardManager::class.java)
-                    .setPrimaryClip(android.content.ClipData.newPlainText("diagnostico", text))
+                    .setPrimaryClip(android.content.ClipData.newPlainText("diagnostico", last))
                 toast("Copiado: pégalo en el chat")
             }
             .setNegativeButton("Cerrar", null)

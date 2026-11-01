@@ -280,7 +280,7 @@ class CastClient(
             while (!closed) {
                 val msg = CastMessage.readFramed(input)
                 val json = try { JSONObject(msg.payloadUtf8) } catch (_: Exception) { continue }
-                if (msg.namespace != CastNs.HEARTBEAT) log("← ${msg.namespace.substringAfterLast('.')}: ${msg.payloadUtf8.take(600)}")
+                if (msg.namespace != CastNs.HEARTBEAT) summarize(msg.namespace, json)?.let(log)
                 when (msg.namespace) {
                     CastNs.HEARTBEAT -> if (json.optString("type") == "PING") {
                         send(CastNs.HEARTBEAT, msg.sourceId, JSONObject().put("type", "PONG"))
@@ -306,6 +306,34 @@ class CastClient(
             log("Conexión cerrada: ${e.message}")
         }
         close(reason)
+    }
+
+    private var lastSummary = ""
+
+    /** Resume los mensajes del receptor para que el registro sea corto y legible. */
+    private fun summarize(ns: String, json: JSONObject): String? {
+        val type = json.optString("type")
+        val line = when {
+            type == "RECEIVER_STATUS" -> {
+                val apps = json.optJSONObject("status")?.optJSONArray("applications")
+                val names = if (apps == null || apps.length() == 0) "ninguna" else
+                    (0 until apps.length()).joinToString { apps.getJSONObject(it).optString("displayName") }
+                "← TV: app abierta = $names"
+            }
+            type == "MEDIA_STATUS" -> {
+                val st = json.optJSONArray("status")?.optJSONObject(0) ?: return null
+                val state = st.optString("playerState")
+                val idle = st.optString("idleReason").let { if (it.isEmpty()) "" else " ($it)" }
+                val ext = st.optJSONObject("extendedStatus")?.optString("playerState")?.let { " / $it" } ?: ""
+                "← TV: $state$ext$idle"
+            }
+            ns == CastNs.MEDIA || ns == CastNs.RECEIVER -> "← TV: ${json.toString().take(300)}"
+            else -> return null
+        }
+        // No repetimos el mismo estado una y otra vez.
+        if (line == lastSummary) return null
+        lastSummary = line
+        return line
     }
 
     private fun handleReceiverStatus(json: JSONObject) {
