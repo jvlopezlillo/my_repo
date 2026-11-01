@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "CastBrowser"
 include(":app")
+include(":tvreceiver")

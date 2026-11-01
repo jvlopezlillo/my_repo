@@ -23,22 +23,28 @@ jobs:
       - name: Tests y compilación
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon testDebugUnitTest assembleRelease
+          ./gradlew --no-daemon :app:testDebugUnitTest assembleRelease
 
       - name: Renombrar APK
-        run: cp app/build/outputs/apk/release/app-release.apk CastBrowser.apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk CastBrowser.apk
+          cp tvreceiver/build/outputs/apk/release/tvreceiver-release.apk CastBrowserTV.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: CastBrowser-apk
-          path: CastBrowser.apk
+          path: |
+            CastBrowser.apk
+            CastBrowserTV.apk
 
       - name: Publicar en Releases (descarga directa desde el móvil)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: castbrowser-latest
           name: CastBrowser (última versión)
-          body: "Descarga **CastBrowser.apk** desde el móvil e instálalo. Compilado desde ${{ github.ref_name }} (${{ github.sha }})."
+          body: "**CastBrowser.apk** → el navegador, para el móvil. **CastBrowserTV.apk** → la app receptora, para la Android TV / Mi Box. Compilado desde ${{ github.ref_name }} (${{ github.sha }})."
           prerelease: false
           make_latest: true
-          files: CastBrowser.apk
+          files: |
+            CastBrowser.apk
+            CastBrowserTV.apk

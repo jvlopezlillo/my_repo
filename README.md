@@ -9,6 +9,15 @@ Navegador mínimo cuyo único objetivo es enviar al Chromecast el vídeo que est
    (lo compila GitHub Actions automáticamente en cada cambio).
 2. Ábrelo y permite "instalar apps de origen desconocido" cuando Android lo pida.
 
+## Aparatos compatibles
+- **Chromecast** y teles con Chromecast integrado (Android TV, Google TV).
+- **DLNA**: Smart TV (Samsung, LG, Sony…), Kodi, VLC, BubbleUPnP. El vídeo va a través del móvil
+  porque estas teles no pueden usar las cookies de la web.
+- **CastBrowser TV**: nuestra app receptora para Android TV / Mi Box (`CastBrowserTV.apk` en
+  Releases). Reproduce con ExoPlayer, usa las cookies y cabeceras del navegador y arranca sola al
+  encender la TV. En Android 10+ conviene darle el permiso "mostrar sobre otras apps" desde su
+  pantalla, para que el vídeo se abra solo.
+
 ## Cómo se usa
 - Navega normalmente. En cuanto un vídeo empieza a reproducirse y hay algún Chromecast
   disponible, aparece el **botón de Chromecast** flotante (abajo a la derecha).
