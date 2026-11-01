@@ -439,6 +439,8 @@ class MainActivity : Activity() {
         m.menu.add(0, 4, 0, "Modo de envío: " + modeLabel(mode()))
         m.menu.add(0, 5, 0, "Usar esta página como inicio")
         m.menu.add(0, 6, 0, "Ir a inicio")
+        m.menu.add(0, 7, 0, "Probar con vídeo de ejemplo")
+        m.menu.add(0, 8, 0, "Diagnóstico (registro)")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> { toast("Buscando Chromecast…"); discovery.discoverNow(forceSubnetScan = true) }
@@ -447,6 +449,8 @@ class MainActivity : Activity() {
                 4 -> chooseMode()
                 5 -> { prefs.edit().putString("home", webView.url ?: HOME).apply(); toast("Página de inicio guardada") }
                 6 -> webView.loadUrl(prefs.getString("home", HOME)!!)
+                7 -> showDevicePicker(listOf(MediaCandidate(SAMPLE_VIDEO, emptyMap(), "file")), 0, sample = true)
+                8 -> showDiagnostics()
             }
             true
         }
@@ -536,7 +540,7 @@ class MainActivity : Activity() {
         showDevicePicker(candidates, 0)
     }
 
-    private fun showDevicePicker(candidates: List<MediaCandidate>, chosen: Int) {
+    private fun showDevicePicker(candidates: List<MediaCandidate>, chosen: Int, sample: Boolean = false) {
         val devices = discovery.availableDevices()
         val labels = devices.map { d ->
             val extra = when (d.via) { "recordado" -> " · guardado"; "manual" -> " · manual"; else -> "" }
@@ -555,7 +559,7 @@ class MainActivity : Activity() {
             b.setMessage("Comprueba que estás en la misma Wi-Fi que el Chromecast.$vpnHint")
             b.setPositiveButton("Añadir por IP") { _, _ -> askManualIp() }
         } else {
-            b.setItems(labels) { _, which -> startCast(devices[which], candidates[chosen]) }
+            b.setItems(labels) { _, which -> startCast(devices[which], candidates[chosen], sample) }
         }
         if (candidates.size > 1) {
             b.setNegativeButton("Elegir vídeo (${candidates.size})") { _, _ ->
@@ -602,9 +606,9 @@ class MainActivity : Activity() {
         return h
     }
 
-    private fun startCast(device: CastDevice, cand: MediaCandidate) {
-        val video = lastVideo
-        val title = video?.title?.ifEmpty { null } ?: webView.title ?: "Vídeo"
+    private fun startCast(device: CastDevice, cand: MediaCandidate, sample: Boolean = false) {
+        val video = if (sample) null else lastVideo
+        val title = if (sample) "Vídeo de prueba" else video?.title?.ifEmpty { null } ?: webView.title ?: "Vídeo"
         val start = video?.time ?: 0.0
         val live = video?.live == true
         val headers = headersFor(cand)
@@ -613,6 +617,9 @@ class MainActivity : Activity() {
         connecting = true
         castDevice = device
         webView.evaluateJavascript("window.__castPauseAll && window.__castPauseAll()", null)
+        diag("──── Enviar a ${device.name} (${device.ip}:${device.port}, ${device.via})")
+        diag("Vídeo: ${cand.kind} ${cand.url.take(200)}")
+        diag("VPN activa: ${net.isVpnActive()} · IP Wi-Fi: ${net.localIpv4()?.first?.hostAddress ?: "ninguna"} · modo: $mode")
         panelTitle.text = "📺 ${device.name}"
         panelStatus.text = "Conectando…"
         seek.progress = 0
@@ -629,6 +636,7 @@ class MainActivity : Activity() {
                     rawSocket = { h, p -> net.connect(h, p, 5000) },
                     onStatus = { s -> main.post { if (client === self[0]) showStatus(s) } },
                     onClosed = { r -> main.post { if (client === self[0] || client == null) onCastEnded(r) } },
+                    log = ::diag,
                 )
                 self[0] = cc
                 c = cc
@@ -640,6 +648,7 @@ class MainActivity : Activity() {
                     else -> if (vpn) listOf(true, false) else listOf(false, true)
                 }
                 val fmp4 = cand.kind == "hls" && detectFmp4(cand.url, headers)
+                if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
                 var error: Exception? = null
                 var ok = false
                 for (useProxy in order) {
@@ -654,10 +663,12 @@ class MainActivity : Activity() {
                         ok = true
                         break
                     } catch (e: CastException) {
+                        diag("Fallo (${if (useProxy) "vía móvil" else "directo"}): ${e.message}")
                         error = e
                     }
                 }
-                if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo")
+                if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo (no hay IP Wi-Fi para el modo 'a través del móvil')")
+                diag("Reproduciendo ✔")
                 val connected = cc
                 main.post {
                     client = connected
@@ -675,13 +686,16 @@ class MainActivity : Activity() {
                             if (net.isVpnActive()) " La VPN está bloqueando la red local: activa \"permitir LAN\" en la VPN." else ""
                     else -> "Error: ${e.message ?: e.javaClass.simpleName}"
                 }
+                diag("ERROR: ${e.javaClass.simpleName}: ${e.message}")
                 try { c?.stop() } catch (_: Exception) {}
                 main.post {
                     connecting = false
                     if (client == null) panel.visibility = View.GONE
                     updateCastButton()
                     AlertDialog.Builder(this).setTitle("No se pudo enviar").setMessage(msg)
-                        .setPositiveButton("Vale", null).show()
+                        .setPositiveButton("Vale", null)
+                        .setNeutralButton("Ver diagnóstico") { _, _ -> showDiagnostics() }
+                        .show()
                 }
             }
         }.start()
@@ -713,7 +727,11 @@ class MainActivity : Activity() {
         proxy?.let { if (it.baseUrl.contains("//${ip.hostAddress}:")) return it }
         proxy?.close()
         return try {
-            MediaProxy(ip) { u -> CookieManager.getInstance().getCookie(u) }.also { proxy = it }
+            MediaProxy(ip) { u -> CookieManager.getInstance().getCookie(u) }.also {
+                it.log = ::diag
+                diag("Proxy escuchando en ${it.baseUrl}")
+                proxy = it
+            }
         } catch (_: Exception) { null }
     }
 
@@ -806,6 +824,45 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // ------------------------------------------------------------------ diagnóstico
+
+    private val diagLines = java.util.ArrayDeque<String>()
+    private var lastProxyLine = ""
+
+    /** Guarda una línea en el registro (las peticiones repetidas del proxy se resumen). */
+    fun diag(line: String) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
+        synchronized(diagLines) {
+            if (line.startsWith("Proxy: TV pide") && line == lastProxyLine) return
+            if (line.startsWith("Proxy:")) lastProxyLine = line
+            diagLines.addLast("$time $line")
+            while (diagLines.size > 400) diagLines.removeFirst()
+        }
+    }
+
+    private fun showDiagnostics() {
+        val text = synchronized(diagLines) { diagLines.joinToString("\n") }.ifEmpty { "Todavía no hay nada registrado. Intenta enviar un vídeo y vuelve aquí." }
+        val tv = TextView(this).apply {
+            this.text = text
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(tv) }
+        AlertDialog.Builder(this)
+            .setTitle("Diagnóstico")
+            .setView(scroll)
+            .setPositiveButton("Copiar") { _, _ ->
+                getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("diagnostico", text))
+                toast("Copiado: pégalo en el chat")
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
     // ------------------------------------------------------------------ utilidades
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -820,5 +877,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val HOME = "https://www.google.com"
+        /** Vídeo público de las muestras oficiales de Cast (MP4 con CORS). */
+        const val SAMPLE_VIDEO = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
     }
 }

@@ -106,6 +106,9 @@ class MediaProxy(
     val baseUrl: String = "http://${bindAddress.hostAddress}:${server.localPort}"
     val rewriter = ProxyRewriter { baseUrl }
 
+    /** Registro de peticiones (para el diagnóstico). */
+    @Volatile var log: (String) -> Unit = {}
+
     init {
         Thread({
             while (running) {
@@ -157,7 +160,8 @@ class MediaProxy(
                 }
                 val target = origin.origin + path.substring(slash)
                 forward(method, target, headers, origin.headers, out)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                log("Proxy: error ${e.javaClass.simpleName}: ${e.message}")
             }
         }
     }
@@ -178,7 +182,11 @@ class MediaProxy(
         reqHeaders["range"]?.let { conn.setRequestProperty("Range", it) }
         cookieProvider(target)?.takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("Cookie", it) }
 
-        val code = try { conn.responseCode } catch (e: Exception) { 502 }
+        val code = try { conn.responseCode } catch (e: Exception) {
+            log("Proxy: no se pudo descargar ${target.take(120)} (${e.message})")
+            502
+        }
+        log("Proxy: TV pide ${target.substringBefore('?').takeLast(80)}${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code")
         val stream: InputStream? = try {
             if (code >= 400) conn.errorStream else conn.inputStream
         } catch (_: Exception) { null }

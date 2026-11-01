@@ -38,6 +38,7 @@ class CastClient(
     private val rawSocket: (String, Int) -> Socket,
     private val onStatus: (CastStatus) -> Unit,
     private val onClosed: (String?) -> Unit,
+    private val log: (String) -> Unit = {},
 ) {
     companion object {
         const val DEFAULT_MEDIA_RECEIVER = "CC1AD845"
@@ -79,8 +80,23 @@ class CastClient(
         socket = tlsWrap(raw, host, port)
         Thread(::readLoop, "cast-reader").apply { isDaemon = true }.start()
         Thread(::heartbeatLoop, "cast-heartbeat").apply { isDaemon = true }.start()
-        send(CastNs.CONNECTION, RECEIVER, JSONObject().put("type", "CONNECT"))
+        send(CastNs.CONNECTION, RECEIVER, connectMessage())
+        log("Conectado por TLS a $host:$port")
     }
+
+    /** CONNECT con los datos de emisor que mandan los emisores oficiales (algunas TV lo exigen). */
+    private fun connectMessage() = JSONObject()
+        .put("type", "CONNECT")
+        .put("connType", 0)
+        .put("origin", JSONObject())
+        .put("userAgent", "CastBrowser")
+        .put("senderInfo", JSONObject()
+            .put("sdkType", 2)
+            .put("version", "15.605.1.3")
+            .put("browserVersion", "44.0.2403.30")
+            .put("platform", 4)
+            .put("systemVersion", "Android")
+            .put("connectionType", 1))
 
     /** Lanza el Default Media Receiver y carga el vídeo. Bloquea hasta que empieza o falla. */
     fun load(
@@ -107,12 +123,42 @@ class CastClient(
             .put("autoplay", true)
             .put("currentTime", if (live) 0.0 else startTime)
             .put("sessionId", sessionId)
-        val resp = request(CastNs.MEDIA, transportId!!, req, 30)
+        log("LOAD → $contentType $url")
+        val resp = try {
+            request(CastNs.MEDIA, transportId!!, req, 60)
+        } catch (_: CastException) {
+            throw CastException("El Chromecast no terminó de cargar el vídeo en 60 s (no llega al vídeo o es demasiado lento)")
+        }
         when (resp.optString("type")) {
-            "MEDIA_STATUS" -> handleMediaStatus(resp)
-            else -> throw CastException(
-                "El Chromecast rechazó el vídeo (${resp.optString("type")} ${resp.optString("reason")})".trim()
-            )
+            "MEDIA_STATUS" -> {
+                handleMediaStatus(resp)
+                if (lastStatus.playerState == "IDLE" && lastStatus.idleReason == "ERROR") {
+                    throw CastException("El Chromecast no pudo reproducir el vídeo (error al cargarlo)")
+                }
+            }
+            else -> throw CastException(describeLoadError(resp))
+        }
+    }
+
+    private fun describeLoadError(resp: JSONObject): String {
+        val type = resp.optString("type")
+        val code = resp.optInt("detailedErrorCode", 0)
+        val reason = resp.optString("reason")
+        val hint = when (code) {
+            0 -> ""
+            104 -> "formato no soportado"
+            in 100..103 -> "el reproductor no puede abrir este vídeo"
+            in 300..399 -> "el Chromecast no puede descargar el vídeo (red, cookies o CORS)"
+            in 400..499 -> "la lista de reproducción (manifiesto) no es válida o no se pudo leer"
+            in 200..299 -> "vídeo protegido con DRM"
+            else -> ""
+        }
+        return buildString {
+            append("El Chromecast rechazó el vídeo ($type")
+            if (code != 0) append(", código $code")
+            if (reason.isNotEmpty()) append(", $reason")
+            append(")")
+            if (hint.isNotEmpty()) append(": ").append(hint)
         }
     }
 
@@ -121,22 +167,38 @@ class CastClient(
         val launchId = requestId.getAndIncrement()
         send(CastNs.RECEIVER, RECEIVER, JSONObject()
             .put("type", "LAUNCH").put("appId", DEFAULT_MEDIA_RECEIVER).put("requestId", launchId))
-        val deadline = System.currentTimeMillis() + 20_000
+        log("LAUNCH $DEFAULT_MEDIA_RECEIVER")
+        // Algunas TV (Android TV / Google TV) tardan bastante en abrir el reproductor
+        // y no siempre avisan solas: preguntamos el estado cada 2 s.
+        val deadline = System.currentTimeMillis() + 45_000
+        var nextPoll = System.currentTimeMillis() + 2000
         while (System.currentTimeMillis() < deadline) {
-            val st = receiverStatus.poll(deadline - System.currentTimeMillis(), TimeUnit.MILLISECONDS) ?: break
-            if (st.optString("type") == "LAUNCH_ERROR") throw CastException("No se pudo abrir el reproductor en el Chromecast")
+            val wait = minOf(deadline, nextPoll) - System.currentTimeMillis()
+            val st = receiverStatus.poll(wait.coerceAtLeast(1), TimeUnit.MILLISECONDS)
+            if (st == null) {
+                if (System.currentTimeMillis() >= nextPoll) {
+                    nextPoll = System.currentTimeMillis() + 2000
+                    send(CastNs.RECEIVER, RECEIVER, JSONObject()
+                        .put("type", "GET_STATUS").put("requestId", requestId.getAndIncrement()))
+                }
+                continue
+            }
+            if (st.optString("type") == "LAUNCH_ERROR") {
+                throw CastException("La TV no pudo abrir el reproductor de Chromecast (${st.optString("reason")})")
+            }
             val apps = st.optJSONObject("status")?.optJSONArray("applications") ?: continue
             for (i in 0 until apps.length()) {
                 val app = apps.getJSONObject(i)
                 if (app.optString("appId") == DEFAULT_MEDIA_RECEIVER && app.has("transportId")) {
                     transportId = app.getString("transportId")
                     sessionId = app.optString("sessionId")
-                    send(CastNs.CONNECTION, transportId!!, JSONObject().put("type", "CONNECT"))
+                    send(CastNs.CONNECTION, transportId!!, connectMessage())
+                    log("Reproductor abierto (transportId=$transportId)")
                     return
                 }
             }
         }
-        throw CastException("El Chromecast no respondió al abrir el reproductor")
+        throw CastException("La TV no llegó a abrir el reproductor de Chromecast en 45 s")
     }
 
     fun play() = mediaCommand("PLAY")
@@ -196,6 +258,7 @@ class CastClient(
             while (!closed) {
                 val msg = CastMessage.readFramed(input)
                 val json = try { JSONObject(msg.payloadUtf8) } catch (_: Exception) { continue }
+                if (msg.namespace != CastNs.HEARTBEAT) log("← ${msg.namespace.substringAfterLast('.')}: ${msg.payloadUtf8.take(600)}")
                 when (msg.namespace) {
                     CastNs.HEARTBEAT -> if (json.optString("type") == "PING") {
                         send(CastNs.HEARTBEAT, msg.sourceId, JSONObject().put("type", "PONG"))
@@ -217,6 +280,7 @@ class CastClient(
             }
         } catch (e: Exception) {
             if (!closed) reason = "Conexión con el Chromecast perdida"
+            log("Conexión cerrada: ${e.message}")
         }
         close(reason)
     }
