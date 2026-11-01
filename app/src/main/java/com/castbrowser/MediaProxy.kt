@@ -106,6 +106,9 @@ class MediaProxy(
     val baseUrl: String = "http://${bindAddress.hostAddress}:${server.localPort}"
     val rewriter = ProxyRewriter { baseUrl }
 
+    /** Último error HTTP (4xx/5xx) que devolvió la web del vídeo. */
+    @Volatile var lastUpstreamError: Int? = null
+
     /** Registro de peticiones (para el diagnóstico). */
     @Volatile var log: (String) -> Unit = {}
 
@@ -186,7 +189,9 @@ class MediaProxy(
             log("Proxy: no se pudo descargar ${target.take(120)} (${e.message})")
             502
         }
-        log("Proxy: TV pide ${target.substringBefore('?').takeLast(80)}${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code")
+        if (code >= 400) lastUpstreamError = code
+        val shortTarget = target.substringBefore('?').let { t -> if (t.length > 90) "…" + t.takeLast(89) else t }
+        log("Proxy: TV pide $shortTarget${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code")
         val stream: InputStream? = try {
             if (code >= 400) conn.errorStream else conn.inputStream
         } catch (_: Exception) { null }

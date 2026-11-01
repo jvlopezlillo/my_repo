@@ -449,7 +449,7 @@ class MainActivity : Activity() {
                 4 -> chooseMode()
                 5 -> { prefs.edit().putString("home", webView.url ?: HOME).apply(); toast("Página de inicio guardada") }
                 6 -> webView.loadUrl(prefs.getString("home", HOME)!!)
-                7 -> showDevicePicker(listOf(MediaCandidate(SAMPLE_VIDEO, emptyMap(), "file")), 0, sample = true)
+                7 -> showDevicePicker(SAMPLES, 0, sample = true)
                 8 -> showDiagnostics()
             }
             true
@@ -567,7 +567,7 @@ class MainActivity : Activity() {
                     .setTitle("Vídeos detectados")
                     .setSingleChoiceItems(candidates.map { it.label }.toTypedArray(), chosen) { d, w ->
                         d.dismiss()
-                        showDevicePicker(candidates, w)
+                        showDevicePicker(candidates, w, sample)
                     }
                     .show()
             }
@@ -650,6 +650,7 @@ class MainActivity : Activity() {
                 }
                 val fmp4 = cand.kind == "hls" && detectFmp4(cand.url, headers)
                 if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
+                proxy?.lastUpstreamError = null
                 var error: Exception? = null
                 var ok = false
                 for (useProxy in order) {
@@ -683,7 +684,9 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 val msg = when (e) {
-                    is CastException -> e.message
+                    is CastException -> proxy?.lastUpstreamError?.let { code ->
+                        "La web del vídeo se niega a dárselo a la tele (error $code). Suele pasar cuando el enlace ha caducado o la web protege el vídeo. Recarga la página, dale al play y vuelve a intentarlo."
+                    } ?: e.message
                     is java.net.SocketTimeoutException, is java.net.ConnectException, is java.net.NoRouteToHostException ->
                         "No se puede llegar al Chromecast (${device.ip})." +
                             if (net.isVpnActive()) " La VPN está bloqueando la red local: activa \"permitir LAN\" en la VPN." else ""
@@ -880,7 +883,10 @@ class MainActivity : Activity() {
 
     companion object {
         const val HOME = "https://www.google.com"
-        /** Vídeo público de las muestras oficiales de Cast (MP4 con CORS). */
-        const val SAMPLE_VIDEO = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        /** Vídeos públicos de prueba (MP4 y HLS). */
+        val SAMPLES = listOf(
+            MediaCandidate("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", emptyMap(), "hls"),
+            MediaCandidate("https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4", emptyMap(), "file"),
+        )
     }
 }
