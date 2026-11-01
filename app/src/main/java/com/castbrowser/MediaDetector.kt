@@ -7,7 +7,13 @@ data class MediaCandidate(
     val url: String,
     val headers: Map<String, String>,
     val kind: String, // hls | dash | file
+    /** Para pruebas: enviar siempre a través del móvil. */
+    val forceProxy: Boolean = false,
 ) {
+    /** Los manifiestos "cenc" (Common Encryption) van cifrados con DRM. */
+    val looksEncrypted: Boolean
+        get() = url.substringBefore('?').lowercase().let { it.contains("/cenc") || it.contains("cenc.mpd") || it.contains("/drm/") }
+
     val contentType: String
         get() = when (kind) {
             "hls" -> "application/x-mpegURL"
@@ -19,7 +25,7 @@ data class MediaCandidate(
         get() {
             val path = url.substringBefore('?').substringAfterLast('/').ifEmpty { url }
             val host = url.substringAfter("://").substringBefore('/')
-            return "${kind.uppercase()} · $path · $host"
+            return "${kind.uppercase()} · $path · $host" + if (forceProxy) " (a través del móvil)" else ""
         }
 }
 

@@ -46,6 +46,7 @@ class ProxyRewriter(private val baseUrl: () -> String) {
 
     /** Reescribe una lista HLS: cada URI (línea o atributo URI="…") pasa por el proxy. */
     fun rewriteM3u8(body: String, base: String): String {
+        if (Regex("#EXT-X-(SESSION-)?KEY:METHOD=SAMPLE-AES").containsMatchIn(body)) sawDrm = true
         val baseUri = URI(base)
         val uriAttr = Regex("URI=\"([^\"]*)\"")
         return body.lineSequence().joinToString("\n") { raw ->
@@ -66,7 +67,11 @@ class ProxyRewriter(private val baseUrl: () -> String) {
      * Reescribe un MPD de DASH: las URL absolutas pasan por el proxy; si hubo
      * redirección y no hay BaseURL, se añade una que apunte al directorio final.
      */
+    /** true si algún manifiesto pedido declaraba protección DRM. */
+    @Volatile var sawDrm = false
+
     fun rewriteMpd(body: String, finalUrl: String, requestedUrl: String): String {
+        if (body.contains("<ContentProtection", ignoreCase = true)) sawDrm = true
         var out = Regex("https?://[^\\s\"'<>]+").replace(body) { m ->
             proxify(m.value.replace("&amp;", "&")).replace("&", "&amp;")
         }

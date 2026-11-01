@@ -642,15 +642,19 @@ class MainActivity : Activity() {
                 c = cc
                 cc.connect()
                 val vpn = net.isVpnActive()
-                val order = when (mode) {
+                val order = when {
+                    cand.forceProxy -> listOf(true)
+                    else -> when (mode) {
                     "direct" -> listOf(false)
                     "proxy" -> listOf(true)
                     else -> if (vpn || prefs.getBoolean("viaPhone:${device.key}", false)) listOf(true, false)
                     else listOf(false, true)
+                    }
                 }
                 val fmp4 = cand.kind == "hls" && detectFmp4(cand.url, headers)
                 if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
                 proxy?.lastUpstreamError = null
+                proxy?.rewriter?.sawDrm = false
                 proxy?.okLogged = 0
                 var error: Exception? = null
                 var ok = false
@@ -685,7 +689,9 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 val msg = when (e) {
-                    is CastException -> proxy?.lastUpstreamError?.let { code ->
+                    is CastException -> if (cand.looksEncrypted || proxy?.rewriter?.sawDrm == true)
+                        "Este vídeo está cifrado con DRM (protección anticopia). El Chromecast sólo puede reproducirlo desde la app oficial del servicio, no desde un navegador."
+                    else proxy?.lastUpstreamError?.let { code ->
                         "La web del vídeo se niega a dárselo a la tele (error $code). Suele pasar cuando el enlace ha caducado o la web protege el vídeo. Recarga la página, dale al play y vuelve a intentarlo."
                     } ?: e.message
                     is java.net.SocketTimeoutException, is java.net.ConnectException, is java.net.NoRouteToHostException ->
@@ -890,7 +896,8 @@ class MainActivity : Activity() {
         /** Vídeos públicos de prueba (MP4 y HLS). */
         val SAMPLES = listOf(
             MediaCandidate("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", emptyMap(), "hls"),
-            MediaCandidate("https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4", emptyMap(), "file"),
+            // El mismo vídeo pero pasando por el móvil: comprueba el camino que se usa con VPN.
+            MediaCandidate("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", emptyMap(), "hls", forceProxy = true),
         )
     }
 }
