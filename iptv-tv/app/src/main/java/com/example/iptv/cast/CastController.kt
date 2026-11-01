@@ -58,7 +58,7 @@ object CastController {
         }
     }
 
-    fun setRelayEnabled(value: Boolean) {
+    fun updateRelayEnabled(value: Boolean) {
         relayEnabled = value
         appCtx?.getSharedPreferences("iptv", Context.MODE_PRIVATE)?.edit()?.putBoolean("cast_relay", value)?.apply()
     }

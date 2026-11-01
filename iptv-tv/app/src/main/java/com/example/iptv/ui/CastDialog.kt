@@ -75,7 +75,7 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(CastController.relayEnabled, { CastController.setRelayEnabled(it) })
+                    Switch(CastController.relayEnabled, { CastController.updateRelayEnabled(it) })
                 }
             }
         },
