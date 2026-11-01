@@ -101,14 +101,17 @@ class ProxyRewriter(private val baseUrl: () -> String) {
  * receptor de Chromecast necesita para HLS/DASH.
  */
 class MediaProxy(
-    private val bindAddress: InetAddress,
+    /** IP del móvil que ve la tele (la de la Wi-Fi o la del punto de acceso). */
+    @Volatile var host: String,
     private val cookieProvider: (String) -> String? = { null },
 ) {
-    private val server = ServerSocket(0, 50, bindAddress)
+    // Escucha en todas las redes locales (Wi-Fi y punto de acceso); sólo atiende a aparatos locales.
+    private val server = ServerSocket(0, 50)
     private val pool = Executors.newCachedThreadPool()
     @Volatile private var running = true
 
-    val baseUrl: String = "http://${bindAddress.hostAddress}:${server.localPort}"
+    val port: Int get() = server.localPort
+    val baseUrl: String get() = "http://$host:${server.localPort}"
     val rewriter = ProxyRewriter { baseUrl }
 
     /** Último error HTTP (4xx/5xx) que devolvió la web del vídeo. */
@@ -141,6 +144,11 @@ class MediaProxy(
 
     private fun handle(socket: Socket) {
         socket.use { s ->
+            val remote = s.inetAddress
+            if (!(remote.isSiteLocalAddress || remote.isLoopbackAddress || remote.isLinkLocalAddress)) {
+                log("Proxy: rechazada conexión desde ${remote.hostAddress} (no es de la red local)")
+                return
+            }
             try {
                 s.soTimeout = 30_000
                 val input = BufferedInputStream(s.getInputStream())

@@ -9,7 +9,36 @@ import android.net.NetworkRequest
 import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
+
+/** Una red local donde puede haber teles: la Wi-Fi a la que estamos conectados o nuestro punto de acceso. */
+data class LocalLink(
+    val address: Inet4Address,
+    val prefix: Int,
+    val iface: String,
+    val hotspot: Boolean,
+) {
+    fun contains(ip: String): Boolean = try {
+        val target = java.net.InetAddress.getByName(ip) as? Inet4Address ?: return false
+        val p = prefix.coerceIn(8, 32)
+        val mask = if (p == 32) -1 else (-1 shl (32 - p))
+        (toInt(address) and mask) == (toInt(target) and mask)
+    } catch (_: Exception) { false }
+
+    /** Las IP de la /24 alrededor de la nuestra (para escanear). */
+    fun neighbours(): List<String> {
+        val b = address.address
+        val prefix3 = "${b[0].toInt() and 0xFF}.${b[1].toInt() and 0xFF}.${b[2].toInt() and 0xFF}."
+        return (1..254).map { prefix3 + it }.filter { it != address.hostAddress }
+    }
+
+    val label: String get() = "${address.hostAddress}/$prefix (${if (hotspot) "punto de acceso" else "Wi-Fi"} $iface)"
+
+    companion object {
+        private fun toInt(a: Inet4Address): Int = a.address.fold(0) { acc, x -> (acc shl 8) or (x.toInt() and 0xFF) }
+    }
+}
 
 /**
  * Sigue la red Wi-Fi (o Ethernet) local por separado de la VPN.
@@ -21,6 +50,13 @@ import java.net.Socket
  */
 class NetworkHelper(context: Context) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
+
+    companion object {
+        private val NON_LOCAL_PREFIXES = listOf(
+            "tun", "ppp", "rmnet", "ccmni", "dummy", "ipsec", "clat", "v4-", "wwan", "rev_rmnet",
+            "seth", "pdp", "ifb", "ip6tnl", "sit", "gre", "erspan", "ip_vti", "lo",
+        )
+    }
 
     @Volatile var localNetwork: Network? = null
         private set
@@ -89,6 +125,41 @@ class NetworkHelper(context: Context) {
         return (la.address as Inet4Address) to la.prefixLength
     }
 
+    /**
+     * Todas las redes locales: la Wi-Fi a la que estamos conectados y, si el móvil
+     * comparte su conexión (punto de acceso / USB), la red de ese punto de acceso.
+     */
+    fun localLinks(): List<LocalLink> {
+        val out = mutableListOf<LocalLink>()
+        val wifiIface = localInterfaceName()
+        localIpv4()?.let { (a, p) -> out.add(LocalLink(a, p, wifiIface ?: "", hotspot = false)) }
+        try {
+            for (ni in NetworkInterface.getNetworkInterfaces().toList()) {
+                if (!ni.isUp || ni.isLoopback || ni.name == wifiIface) continue
+                // Fuera: VPN, datos móviles y interfaces internas.
+                if (NON_LOCAL_PREFIXES.any { ni.name.startsWith(it) }) continue
+                for (ia in ni.interfaceAddresses) {
+                    val a = ia.address as? Inet4Address ?: continue
+                    if (!a.isSiteLocalAddress) continue
+                    if (out.any { it.address == a }) continue
+                    out.add(LocalLink(a, ia.networkPrefixLength.toInt(), ni.name, hotspot = true))
+                }
+            }
+        } catch (_: Exception) {}
+        return out
+    }
+
+    /** La red local en la que está esa IP (o la primera que tengamos). */
+    fun linkFor(ip: String): LocalLink? {
+        val links = localLinks()
+        return links.firstOrNull { it.contains(ip) } ?: links.firstOrNull()
+    }
+
+    private fun inWifi(host: String): Boolean {
+        val wifi = localIpv4() ?: return true
+        return LocalLink(wifi.first, wifi.second, "", false).contains(host)
+    }
+
     fun localInterfaceName(): String? {
         val net = localNetwork ?: return null
         return cm.getLinkProperties(net)?.interfaceName
@@ -104,7 +175,7 @@ class NetworkHelper(context: Context) {
     /** Abre una conexión TCP al dispositivo, probando primero por la Wi-Fi. */
     fun connect(host: String, port: Int, timeoutMs: Int = 4000): Socket {
         var last: Exception? = null
-        localNetwork?.takeIf { canBind(it) }?.let { net ->
+        localNetwork?.takeIf { inWifi(host) && canBind(it) }?.let { net ->
             try {
                 val s = net.socketFactory.createSocket()
                 s.connect(InetSocketAddress(host, port), timeoutMs)
@@ -128,7 +199,7 @@ class NetworkHelper(context: Context) {
     /** Abre una URL HTTP en la red local (para leer el nombre del Chromecast). */
     fun openLocal(url: String): java.net.URLConnection {
         val u = java.net.URL(url)
-        return localNetwork?.takeIf { canBind(it) }?.let { net ->
+        return localNetwork?.takeIf { inWifi(u.host) && canBind(it) }?.let { net ->
             try { net.openConnection(u) } catch (_: Exception) { null }
         } ?: u.openConnection()
     }

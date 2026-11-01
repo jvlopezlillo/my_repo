@@ -121,7 +121,11 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
                     io.submit { checkRemembered() },
                 )
                 tasks.forEach { try { it.get(8, TimeUnit.SECONDS) } catch (_: Exception) {} }
-                if (forceSubnetScan || availableDevices().isEmpty()) subnetScan()
+                // Con punto de acceso suele haber pocos aparatos y el multicast falla más: escaneamos.
+                val hotspots = net.localLinks().filter { it.hotspot }
+                val hotspotEmpty = hotspots.isNotEmpty() &&
+                    availableDevices().none { d -> hotspots.any { it.contains(d.ip) } }
+                if (forceSubnetScan || availableDevices().isEmpty() || hotspotEmpty) subnetScan()
                 if (nsdListener == null) main.post { startNsd() }
             } finally {
                 try { lock?.release() } catch (_: Exception) {}
@@ -162,23 +166,40 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
 
     // ---------------------------------------------------------------- mDNS
 
-    private fun mdnsMulticast() {
-        val queries = listOf(Mdns.buildQuery(Mdns.SERVICE), Mdns.buildQuery(Mdns.TV_SERVICE))
-        val group = InetAddress.getByName(Mdns.GROUP)
+    /**
+     * Sockets para enviar búsquedas por multicast:
+     *  - atado a la Wi-Fi (salta la VPN si se permite),
+     *  - uno por cada punto de acceso del móvil (la TV conectada a nuestros datos),
+     *  - uno normal, por si la VPN deja pasar la red local.
+     */
+    private fun multicastSockets(): MutableList<DatagramSocket> {
         val sockets = mutableListOf<DatagramSocket>()
         try {
-            // Socket atado a la Wi-Fi (salta la VPN si se permite).
+            val s = MulticastSocket(0)
+            net.localInterfaceName()?.let { name ->
+                NetworkInterface.getByName(name)?.let { s.networkInterface = it }
+            }
+            net.bindToLocal(s)
+            s.timeToLive = 255
+            sockets.add(s)
+        } catch (_: Exception) {}
+        for (link in net.localLinks().filter { it.hotspot }) {
             try {
-                val s = MulticastSocket(0)
-                net.localInterfaceName()?.let { name ->
-                    NetworkInterface.getByName(name)?.let { s.networkInterface = it }
-                }
-                net.bindToLocal(s)
+                val s = MulticastSocket(java.net.InetSocketAddress(link.address, 0))
+                NetworkInterface.getByName(link.iface)?.let { s.networkInterface = it }
                 s.timeToLive = 255
                 sockets.add(s)
             } catch (_: Exception) {}
-            // Socket normal, por si la VPN deja pasar la LAN.
-            try { sockets.add(MulticastSocket(0)) } catch (_: Exception) {}
+        }
+        try { sockets.add(MulticastSocket(0)) } catch (_: Exception) {}
+        return sockets
+    }
+
+    private fun mdnsMulticast() {
+        val queries = listOf(Mdns.buildQuery(Mdns.SERVICE), Mdns.buildQuery(Mdns.TV_SERVICE))
+        val group = InetAddress.getByName(Mdns.GROUP)
+        val sockets = multicastSockets()
+        try {
 
             repeat(2) {
                 for (s in sockets) for (query in queries) {
@@ -233,17 +254,8 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     private fun ssdpSearch() {
         val locations = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val group = InetAddress.getByName("239.255.255.250")
-        val sockets = mutableListOf<DatagramSocket>()
+        val sockets = multicastSockets()
         try {
-            try {
-                val s = MulticastSocket(0)
-                net.localInterfaceName()?.let { name ->
-                    NetworkInterface.getByName(name)?.let { s.networkInterface = it }
-                }
-                net.bindToLocal(s)
-                sockets.add(s)
-            } catch (_: Exception) {}
-            try { sockets.add(MulticastSocket(0)) } catch (_: Exception) {}
             val msgs = listOf(Dlna.searchMessage(Dlna.MEDIA_RENDERER), Dlna.searchMessage(Dlna.AV_TRANSPORT))
             repeat(2) {
                 for (s in sockets) for (m in msgs) {
@@ -321,20 +333,17 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     // ------------------------------------------------------ Escaneo subred
 
     private fun subnetScan() {
-        val (ip, _) = net.localIpv4() ?: return
-        val b = ip.address
-        val base = ((b[0].toInt() and 0xFF) shl 24) or ((b[1].toInt() and 0xFF) shl 16) or
-            ((b[2].toInt() and 0xFF) shl 8)
-        // Como mucho una /24 alrededor de nuestra IP.
-        val hosts = (1..254).map { i ->
-            val v = base or i
-            "${(v ushr 24) and 0xFF}.${(v ushr 16) and 0xFF}.${(v ushr 8) and 0xFF}.${v and 0xFF}"
-        }.filter { it != ip.hostAddress }
+        // La Wi-Fi y, si lo hay, el punto de acceso del móvil (como mucho una /24 de cada).
+        for (link in net.localLinks()) scanLink(link)
+    }
+
+    private fun scanLink(link: LocalLink) {
+        val hosts = link.neighbours()
 
         // 1) mDNS unicast a cada IP: los Chromecast contestan con su nombre.
         try {
-            DatagramSocket().use { s ->
-                net.bindToLocal(s)
+            (if (link.hotspot) DatagramSocket(java.net.InetSocketAddress(link.address, 0)) else DatagramSocket()).use { s ->
+                if (!link.hotspot) net.bindToLocal(s)
                 val q = Mdns.buildQuery()
                 for (h in hosts) {
                     try { s.send(DatagramPacket(q, q.size, InetAddress.getByName(h), Mdns.PORT)) } catch (_: Exception) {}

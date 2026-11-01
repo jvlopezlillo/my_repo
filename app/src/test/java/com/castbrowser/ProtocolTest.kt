@@ -158,7 +158,7 @@ class ProtocolTest {
                 }
             }
         }.apply { isDaemon = true }.start()
-        val proxy = MediaProxy(InetAddress.getLoopbackAddress()) { "session=1" }
+        val proxy = MediaProxy("127.0.0.1") { "session=1" }
         try {
             val origin = "http://127.0.0.1:${server.localPort}"
             val url = proxy.rewriter.proxify("$origin/v/index.m3u8", mapOf("Referer" to "https://page.com/"))

@@ -556,7 +556,7 @@ class MainActivity : Activity() {
             val vpnHint = if (net.isVpnActive())
                 "\n\nTienes una VPN activa: activa en la VPN la opción de permitir la red local (LAN / \"Excluir IPs privadas\"), o añade el Chromecast por IP desde el menu ⋮."
             else ""
-            b.setMessage("Comprueba que estás en la misma Wi-Fi que el Chromecast.$vpnHint")
+            b.setMessage("Comprueba que la tele está en la misma Wi-Fi que el móvil, o conectada al punto de acceso del móvil.$vpnHint")
             b.setPositiveButton("Añadir por IP") { _, _ -> askManualIp() }
         } else {
             b.setItems(labels) { _, which -> startCast(devices[which], candidates[chosen], sample) }
@@ -619,7 +619,8 @@ class MainActivity : Activity() {
         webView.evaluateJavascript("window.__castPauseAll && window.__castPauseAll()", null)
         diag("──── Enviar a ${device.name} (${device.ip}:${device.port}, ${device.via})")
         diag("Vídeo: ${cand.kind} ${cand.url.take(200)}")
-        diag("VPN activa: ${net.isVpnActive()} · IP Wi-Fi: ${net.localIpv4()?.first?.hostAddress ?: "ninguna"} · modo: $mode")
+        diag("VPN activa: ${net.isVpnActive()} · modo: $mode")
+        diag("Redes locales: ${net.localLinks().joinToString { it.label }.ifEmpty { "ninguna" }}")
         panelTitle.text = "📺 ${device.name}"
         panelStatus.text = "Conectando…"
         seek.progress = 0
@@ -670,7 +671,7 @@ class MainActivity : Activity() {
                 var ok = false
                 for (useProxy in order) {
                     val url = if (useProxy) {
-                        val p = ensureProxy() ?: continue
+                        val p = ensureProxy(device) ?: continue
                         p.rewriter.defaultHeaders = headers
                         p.rewriter.proxify(cand.url, headers)
                     } else cand.url
@@ -689,7 +690,7 @@ class MainActivity : Activity() {
                         error = e
                     }
                 }
-                if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo (no hay IP Wi-Fi para el modo 'a través del móvil')")
+                if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo (el móvil no está en ninguna red local: ni Wi-Fi ni punto de acceso)")
                 diag("Reproduciendo ✔")
                 val connected = cc
                 main.post {
@@ -748,12 +749,13 @@ class MainActivity : Activity() {
         return text.contains("#EXT-X-MAP") || Regex("""\.(m4s|mp4|cmfv)(\?|$)""", RegexOption.MULTILINE).containsMatchIn(text)
     }
 
-    private fun ensureProxy(): MediaProxy? {
-        val ip = net.localIpv4()?.first ?: return null
-        proxy?.let { if (it.baseUrl.contains("//${ip.hostAddress}:")) return it }
-        proxy?.close()
+    /** Proxy en el móvil, anunciado con la IP que ve la tele (Wi-Fi o punto de acceso). */
+    private fun ensureProxy(device: CastDevice): MediaProxy? {
+        val link = net.linkFor(device.ip) ?: return null
+        val host = link.address.hostAddress ?: return null
+        proxy?.let { it.host = host; return it }
         return try {
-            MediaProxy(ip) { u -> CookieManager.getInstance().getCookie(u) }.also {
+            MediaProxy(host) { u -> CookieManager.getInstance().getCookie(u) }.also {
                 it.log = ::diag
                 diag("Proxy escuchando en ${it.baseUrl}")
                 proxy = it

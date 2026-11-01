@@ -27,6 +27,11 @@ Navegador mínimo cuyo único objetivo es enviar al Chromecast el vídeo que est
   de volumen del móvil) y detener.
 - Si una página tiene varios vídeos (p. ej. anuncios), en la lista aparece **Elegir vídeo**.
 
+## Sin Wi-Fi: compartiendo los datos del móvil
+Activa el punto de acceso del móvil y conecta la tele (Mi Box, Smart TV o Chromecast) a él.
+El navegador detecta la red del punto de acceso, busca ahí las teles y les sirve el vídeo
+desde el móvil. Un Chromecast tiene que configurarse antes con la app Google Home en esa red.
+
 ## Con VPN
 La búsqueda y la conexión se hacen atando los sockets a la red **Wi-Fi** en vez de a la VPN,
 y además:
