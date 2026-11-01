@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import coil.compose.AsyncImage
 import com.example.iptv.FAV
+import com.example.iptv.cast.CastController
 import com.example.iptv.MainViewModel
 import com.example.iptv.Screen
 
@@ -94,6 +95,12 @@ fun HomeScreen(vm: MainViewModel) {
                 )
             }
             vm.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            CastController.connectedName?.let { name ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enviando a $name", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f, fill = false))
+                    Button(onClick = { CastController.disconnect() }) { Text("Detener") }
+                }
+            }
             Spacer(Modifier.height(8.dp))
 
             if (vm.loading) {

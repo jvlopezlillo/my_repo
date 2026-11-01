@@ -10,6 +10,7 @@ App de listas IPTV para Android TV y móvil/tablet (mismo APK) (Kotlin + Jetpack
 - Grupos: botón «Grupos» para ocultarlos (reversible) o borrarlos de la lista (persiste al actualizar; se puede restaurar). Por lista.
 - Proxy SOCKS5 (botón «Proxy»): para canales bloqueados por país, el tráfico puede salir por tu VPS (p. ej. Dante). Se aplica por separado a la descarga de listas y al vídeo; incluye botón de prueba que compara la IP directa y la del proxy.
 - Sincronización remota (opcional): gestiona las listas de un dispositivo (p. ej. el Firestick de tu padre) desde una web de administración en tu propio servidor, sin usar la MAC (código de vinculación de 6 cifras). Cambios en los dos sentidos: se pueden editar en el dispositivo y desde la web. Ver [`../iptv-sync-server`](../iptv-sync-server/README.md).
+- Enviar a Chromecast (solo móvil/tablet con Google Play Services): botón «Enviar a TV» en el reproductor. Por defecto el móvil retransmite el vídeo (con su VPN/proxy) al Chromecast por la Wi-Fi local; con una VPN activa hay que permitir la red local (LAN) en la VPN para ver el Chromecast.
 - Sin EPG (por ahora). Las listas se cachean en local; "Actualizar" las vuelve a descargar.
 
 ## Móvil / tablet

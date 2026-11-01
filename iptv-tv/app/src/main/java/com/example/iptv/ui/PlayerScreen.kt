@@ -1,6 +1,13 @@
 package com.example.iptv.ui
 
+import android.Manifest
+import android.os.Build
 import android.view.ViewGroup
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import com.example.iptv.cast.CastController
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -61,11 +68,28 @@ fun PlayerScreen(vm: MainViewModel) {
         onDispose { view.keepScreenOn = false }
     }
 
-    LaunchedEffect(channel.url) {
+    // Si hay un Chromecast conectado el canal se envía allí y el reproductor local se detiene.
+    val castName = CastController.connectedName
+    val casting = castName != null
+    var showCast by remember { mutableStateOf(false) }
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { showCast = true }
+    val openCast = {
+        if (Build.VERSION.SDK_INT >= 33) {
+            permLauncher.launch(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES, Manifest.permission.POST_NOTIFICATIONS))
+        } else showCast = true
+    }
+
+    LaunchedEffect(channel.url, castName) {
         error = null
         overlay = true
-        player.setMediaItem(MediaItem.fromUri(channel.url))
-        player.prepare()
+        if (castName != null) {
+            player.stop()
+            player.clearMediaItems()
+            CastController.load(channel, vm.videoClient())
+        } else {
+            player.setMediaItem(MediaItem.fromUri(channel.url))
+            player.prepare()
+        }
         delay(4000)
         overlay = false
     }
@@ -107,7 +131,8 @@ fun PlayerScreen(vm: MainViewModel) {
                 }
             },
         )
-        if (overlay || error != null) {
+        if (showCast) CastDeviceDialog { showCast = false }
+        if (overlay || error != null || casting) {
             Column(
                 Modifier.align(Alignment.BottomStart).fillMaxWidth()
                     .background(Color(0xCC000000)).padding(horizontal = 40.dp, vertical = 24.dp),
@@ -119,12 +144,21 @@ fun PlayerScreen(vm: MainViewModel) {
                     }
                     FavoriteButton(vm.isFavorite(channel), { vm.toggleFavorite(channel) })
                 }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (casting) Text("Reproduciendo en $castName", color = MaterialTheme.colorScheme.primary)
+                (error ?: CastController.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!tv) {
-                    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        Modifier.padding(top = 12.dp).horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
                         Button(onClick = { vm.zap(-1) }) { Text("◀ Anterior") }
                         Button(onClick = { vm.zap(+1) }) { Text("Siguiente ▶") }
                         Button(onClick = { vm.screen = com.example.iptv.Screen.HOME }) { Text("Lista") }
+                        if (CastController.available) {
+                            Button(onClick = { if (casting) CastController.disconnect() else openCast() }) {
+                                Text(if (casting) "Dejar de enviar" else "Enviar a TV")
+                            }
+                        }
                     }
                 }
             }

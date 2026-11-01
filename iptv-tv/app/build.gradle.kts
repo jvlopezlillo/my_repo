@@ -52,4 +52,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.2")
     implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // Enviar a Chromecast (solo móvil/tablet con Google Play Services)
+    implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 }

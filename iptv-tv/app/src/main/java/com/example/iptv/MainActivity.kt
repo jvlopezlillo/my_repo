@@ -1,5 +1,8 @@
 package com.example.iptv
 
+import android.app.UiModeManager
+import android.content.Context
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -9,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import com.example.iptv.cast.CastController
 import com.example.iptv.ui.AddPlaylistScreen
 import com.example.iptv.ui.AppTheme
 import com.example.iptv.ui.GroupsScreen
@@ -23,6 +27,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Cast solo en móvil/tablet: en Android TV / Fire TV no tiene sentido (y Fire TV no trae Google Play Services).
+        val tvMode = (getSystemService(Context.UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+        if (!tvMode) CastController.init(applicationContext)
         setContent {
             AppTheme {
                 Surface(Modifier.fillMaxSize(), color = Color(0xFF0B1220), contentColor = Color.White) {
