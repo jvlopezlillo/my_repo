@@ -58,10 +58,15 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
             return cors(newFixedLengthResponse(Status.METHOD_NOT_ALLOWED, "text/plain", "Método no permitido"))
         }
         val target = decode(session.uri)
-            ?: return cors(newFixedLengthResponse(Status.FORBIDDEN, "text/plain", "Prohibido"))
+        if (target == null) {
+            DebugLog.log("relay ✗ ${session.remoteIpAddress} petición no firmada: ${session.uri.take(40)}")
+            return cors(newFixedLengthResponse(Status.FORBIDDEN, "text/plain", "Prohibido"))
+        }
+        DebugLog.log("relay ← ${session.remoteIpAddress} ${session.method} ${DebugLog.redact(target)}")
         return try {
             proxy(target)
         } catch (e: Exception) {
+            DebugLog.log("relay ✗ ${e.javaClass.simpleName}: ${e.message}")
             cors(newFixedLengthResponse(Status.SERVICE_UNAVAILABLE, "text/plain", "Origen no disponible: ${e.message}"))
         }
     }
@@ -72,26 +77,37 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         if (!resp.isSuccessful) {
             val code = resp.code
             resp.close()
+            DebugLog.log("relay ✗ el origen respondió $code")
             val status = Status.values().firstOrNull { it.requestStatus == code } ?: Status.SERVICE_UNAVAILABLE
             return cors(newFixedLengthResponse(status, "text/plain", "Origen respondió $code"))
         }
         val body = resp.body!!
         val isPlaylist = runCatching {
-            val peek = body.source().peek()
-            peek.request(7) && peek.readUtf8(7) == "#EXTM3U"
+            val src = body.source()
+            src.request(512)
+            src.buffer.snapshot(minOf(512L, src.buffer.size).toInt()).utf8().contains("#EXTM3U")
         }.getOrDefault(false)
+        DebugLog.log("relay → origen ${resp.code} ${body.contentType()} lista=$isPlaylist")
 
         if (isPlaylist) {
             val text = body.string()
-            val out = newFixedLengthResponse(Status.OK, "application/vnd.apple.mpegurl", rewrite(text, resp.request.url))
+            val rewritten = rewrite(text, resp.request.url)
+            DebugLog.log("relay lista reescrita: ${text.lines().size} líneas")
+            val out = newFixedLengthResponse(Status.OK, "application/vnd.apple.mpegurl", rewritten)
             out.addHeader("Cache-Control", "no-cache")
             return cors(out)
         }
 
         val type = body.contentType()?.toString() ?: guessType(target)
         val stream = object : FilterInputStream(body.byteStream()) {
+            var sent = 0L
+            override fun read(): Int = super.read().also { if (it >= 0) sent++ }
+            override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { if (it > 0) sent += it }
             override fun close() {
-                try { super.close() } finally { resp.close() }
+                try { super.close() } finally {
+                    resp.close()
+                    DebugLog.log("relay ✓ enviados ${sent / 1024} KB (${DebugLog.redact(target)})")
+                }
             }
         }
         val len = body.contentLength()

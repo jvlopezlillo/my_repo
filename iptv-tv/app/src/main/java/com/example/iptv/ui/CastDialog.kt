@@ -1,6 +1,16 @@
 package com.example.iptv.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
+import com.example.iptv.cast.DebugLog
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -65,6 +75,9 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                         Text(route.name)
                     }
                 }
+                var showLog by remember { mutableStateOf(false) }
+                if (showLog) CastLogDialog { showLog = false }
+                Button(onClick = { showLog = true }) { Text("Ver registro de diagnóstico") }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text("Retransmitir por el móvil")
@@ -76,6 +89,48 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                         )
                     }
                     Switch(CastController.relayEnabled, { CastController.updateRelayEnabled(it) })
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("Cerrar") } },
+    )
+}
+
+/** Registro de diagnóstico del envío a Chromecast: se puede compartir o copiar para pasarlo a quien lo revise. */
+@Composable
+fun CastLogDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val version = DebugLog.version // se refresca con cada línea nueva
+    val text = remember(version) { DebugLog.report() }
+    val scroll = rememberScrollState()
+    LaunchedEffect(version) { scroll.scrollTo(scroll.maxValue) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Registro de diagnóstico") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                    modifier = Modifier.heightIn(max = 300.dp).verticalScroll(scroll),
+                )
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "Registro IPTV TV")
+                            putExtra(Intent.EXTRA_TEXT, text)
+                        }
+                        ctx.startActivity(Intent.createChooser(send, "Compartir registro"))
+                    }) { Text("Compartir") }
+                    Button(onClick = {
+                        (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                            .setPrimaryClip(ClipData.newPlainText("registro", text))
+                    }) { Text("Copiar") }
+                    Button(onClick = { DebugLog.clear() }) { Text("Borrar") }
                 }
             }
         },

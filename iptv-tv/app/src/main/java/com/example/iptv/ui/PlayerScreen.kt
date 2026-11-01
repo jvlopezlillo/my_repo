@@ -72,6 +72,7 @@ fun PlayerScreen(vm: MainViewModel) {
     val castName = CastController.connectedName
     val casting = castName != null
     var showCast by remember { mutableStateOf(false) }
+    var showLog by remember { mutableStateOf(false) }
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { showCast = true }
     val openCast = {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -132,6 +133,7 @@ fun PlayerScreen(vm: MainViewModel) {
             },
         )
         if (showCast) CastDeviceDialog { showCast = false }
+        if (showLog) CastLogDialog { showLog = false }
         if (overlay || error != null || casting) {
             Column(
                 Modifier.align(Alignment.BottomStart).fillMaxWidth()
@@ -145,6 +147,7 @@ fun PlayerScreen(vm: MainViewModel) {
                     FavoriteButton(vm.isFavorite(channel), { vm.toggleFavorite(channel) })
                 }
                 if (casting) Text("Reproduciendo en $castName", color = MaterialTheme.colorScheme.primary)
+                CastController.status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 (error ?: CastController.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!tv) {
                     Row(
@@ -158,6 +161,7 @@ fun PlayerScreen(vm: MainViewModel) {
                             Button(onClick = { if (casting) CastController.disconnect() else openCast() }) {
                                 Text(if (casting) "Dejar de enviar" else "Enviar a TV")
                             }
+                            Button(onClick = { showLog = true }) { Text("Registro") }
                         }
                     }
                 }
