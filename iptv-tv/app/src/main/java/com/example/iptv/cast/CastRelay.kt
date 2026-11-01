@@ -89,7 +89,24 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         return runCatching { String(Base64.decode(enc, b64)) }.getOrNull()
     }
 
+    /** Peticiones recibidas (sirve para saber si el Chromecast llega a contactar con el móvil). */
+    val requestCount = java.util.concurrent.atomic.AtomicInteger()
+    private val reqHeaders = ThreadLocal<Map<String, String>>()
+
     override fun serve(session: IHTTPSession): Response {
+        requestCount.incrementAndGet()
+        val h: Map<String, String> = session.headers ?: emptyMap()
+        reqHeaders.set(h)
+        val shown = when {
+            session.uri.startsWith("/r/") -> "/r/…"
+            session.uri.startsWith("/t/") -> "/t/…/" + session.uri.substringAfterLast('/')
+            else -> session.uri.take(30)
+        }
+        DebugLog.log(
+            "relay ← ${session.remoteIpAddress} ${session.method} $shown origin=${h["origin"]} " +
+                "ua=${h["user-agent"]?.take(40)} acrh=${h["access-control-request-headers"]} " +
+                "pna=${h["access-control-request-private-network"]}",
+        )
         if (session.method == Method.OPTIONS) return cors(newFixedLengthResponse(Status.OK, "text/plain", ""))
         if (session.method != Method.GET && session.method != Method.HEAD) {
             return cors(newFixedLengthResponse(Status.METHOD_NOT_ALLOWED, "text/plain", "Método no permitido"))
@@ -100,7 +117,7 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
             DebugLog.log("relay ✗ ${session.remoteIpAddress} petición no firmada: ${session.uri.take(40)}")
             return cors(newFixedLengthResponse(Status.FORBIDDEN, "text/plain", "Prohibido"))
         }
-        DebugLog.log("relay ← ${session.remoteIpAddress} ${session.method} ${DebugLog.redact(target)}")
+        DebugLog.log("relay: origen ${DebugLog.redact(target)}")
         return try {
             proxy(target)
         } catch (e: Exception) {
@@ -180,10 +197,20 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
     }
 
     private fun cors(r: Response): Response {
-        r.addHeader("Access-Control-Allow-Origin", "*")
-        r.addHeader("Access-Control-Allow-Headers", "*")
+        val h = reqHeaders.get() ?: emptyMap()
+        val origin = h["origin"]
+        if (origin != null) {
+            r.addHeader("Access-Control-Allow-Origin", origin)
+            r.addHeader("Access-Control-Allow-Credentials", "true")
+            r.addHeader("Vary", "Origin")
+        } else {
+            r.addHeader("Access-Control-Allow-Origin", "*")
+        }
+        r.addHeader("Access-Control-Allow-Headers", h["access-control-request-headers"] ?: "*")
         r.addHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-        r.addHeader("Access-Control-Expose-Headers", "*")
+        r.addHeader("Access-Control-Allow-Private-Network", "true") // el receptor (https) accede a una IP privada
+        r.addHeader("Access-Control-Max-Age", "600")
+        r.addHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type")
         return r
     }
 
