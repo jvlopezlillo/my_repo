@@ -255,7 +255,7 @@ class TsHlsSession(private val url: String, private val client: OkHttpClient) {
 
     private companion object {
         const val TARGET = 4.0
-        const val IDLE_MS = 45_000L
+        const val IDLE_MS = 30_000L
         const val MASK33 = (1L shl 33) - 1
         val VIDEO_TYPES = setOf(0x02, 0x1B, 0x24, 0x10, 0xEA)
     }

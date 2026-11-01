@@ -61,9 +61,14 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         return cors(newFixedLengthResponse(Status.OK, "video/mp2t", java.io.ByteArrayInputStream(data), data.size.toLong()))
     }
 
-    override fun stop() {
+    /** Cierra ya las conversiones TS→HLS (libera la conexión con el proveedor, que a menudo limita las simultáneas). */
+    fun stopTs() {
         tsSessions.values.forEach { it.stop() }
         tsSessions.clear()
+    }
+
+    override fun stop() {
+        stopTs()
         super.stop()
     }
 

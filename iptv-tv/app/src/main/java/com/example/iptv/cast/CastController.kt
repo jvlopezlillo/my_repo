@@ -25,6 +25,9 @@ import com.google.android.gms.common.GoogleApiAvailability
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.util.concurrent.TimeUnit
 
 /**
  * Envío a Chromecast (Google Cast).
@@ -111,6 +114,7 @@ object CastController {
         status = "Preparando el canal…"
         val token = ++loadToken
         attempt = null
+        relay?.stopTs()
         DebugLog.log("── Enviar «${channel.name}» · ${DebugLog.redact(channel.url)}")
         Thread {
             val probe = resolve(channel.url, client)
@@ -132,7 +136,12 @@ object CastController {
     private fun resolve(url: String, client: OkHttpClient): Probe {
         var first: Probe? = null
         for (candidate in candidates(url)) {
-            val p = probe(candidate, client)
+            var p = probe(candidate, client)
+            if (p.http == 403 || p.http == 429) {
+                DebugLog.log("sonda: HTTP ${p.http}, se reintenta en 2 s (¿límite de conexiones del proveedor?)")
+                Thread.sleep(2000)
+                p = probe(candidate, client)
+            }
             DebugLog.log("sonda ${DebugLog.redact(candidate)} → ${p.kind} http=${p.http} tipo=${p.contentType}")
             if (p.kind == Kind.HLS) return p
             if (first == null) first = p
@@ -163,7 +172,12 @@ object CastController {
     private fun probe(url: String, client: OkHttpClient): Probe {
         return try {
             val req = Request.Builder().url(url).header("User-Agent", UA).get().build()
-            client.newCall(req).execute().use { r ->
+            val quick = client.newBuilder()
+                .connectTimeout(6, TimeUnit.SECONDS)
+                .readTimeout(8, TimeUnit.SECONDS)
+                .callTimeout(12, TimeUnit.SECONDS)
+                .build()
+            quick.newCall(req).execute().use { r ->
                 val ct = r.header("Content-Type")
                 if (!r.isSuccessful) {
                     Probe(url, Kind.ERROR, r.code, ct)
@@ -200,9 +214,9 @@ object CastController {
         val convertTs = p.kind == Kind.TS
         val wantsRelay = forceRelay || viaProxy || vpnActive(ctx)
         val first = when {
-            convertTs -> Mode.RELAY                        // el MPEG-TS directo solo se puede convertir en el móvil
+            forceRelay -> Mode.RELAY                       // forzado: también sirve para volver a comprobar la red
             relayUnreachable() -> Mode.DIRECT              // ya sabemos que este Chromecast no llega al móvil
-            wantsRelay -> Mode.RELAY
+            convertTs || wantsRelay -> Mode.RELAY          // MPEG-TS: solo se puede convertir en el móvil
             else -> Mode.DIRECT
         }
         DebugLog.log("modo inicial: $first (forzado=$forceRelay proxy=$viaProxy vpn=${vpnActive(ctx)} ts=$convertTs inalcanzable=${relayUnreachable()})")
@@ -235,9 +249,9 @@ object CastController {
                 if (r.requestCount.get() != before) return@postDelayed // sí ha contactado: se deja avanzar
                 DebugLog.log("el Chromecast no ha contactado con el móvil en 6 s (¿aislamiento de red / VLAN?)")
                 markRelay(false)
-                if (!att.triedDirect && !convertTs) send(att, Mode.DIRECT)
-                else fail(att, "El Chromecast no consigue conectar con el móvil por la Wi-Fi (¿red de invitados, aislamiento de clientes o VLAN?). " +
-                    "Este canal necesita esa conexión para convertirse a HLS.")
+                r.stopTs()
+                if (!att.triedDirect) send(att, Mode.DIRECT) // HLS directo, o MPEG-TS crudo como último recurso
+                else fail(att, noPlayMessage(att))
             }, 6_000)
         } else {
             att.triedDirect = true
@@ -247,7 +261,7 @@ object CastController {
                 if (attempt !== att || att.mode != Mode.DIRECT || att.progressed || att.finished) return@postDelayed
                 DebugLog.log("sin progreso en 15 s con el envío directo")
                 if (!att.triedRelay && !relayUnreachable()) send(att, Mode.RELAY)
-                else fail(att, "El Chromecast no consigue abrir el canal.")
+                else fail(att, noPlayMessage(att))
             }, 15_000)
         }
 
@@ -288,9 +302,15 @@ object CastController {
                 DebugLog.log("error en el envío por el móvil: se prueba el directo")
                 send(att, Mode.DIRECT)
             }
-            else -> fail(att, "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo.")
+            else -> fail(att, noPlayMessage(att))
         }
     }
+
+    private fun noPlayMessage(att: Attempt): String =
+        if (att.probe.kind == Kind.TS) {
+            "Este canal es MPEG-TS directo: el Chromecast no lo reproduce tal cual y no puede conectar con el móvil para convertirlo. " +
+                "Prueba «Duplicar pantalla» (Transmitir pantalla de Android) o un canal con versión HLS."
+        } else "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo."
 
     private fun ensureRelay(ctx: Context, client: OkHttpClient): CastRelay? {
         relay?.let { it.client = client; return it }
@@ -300,12 +320,25 @@ object CastController {
                 relay = it
                 ContextCompat.startForegroundService(ctx, Intent(ctx, CastRelayService::class.java))
                 DebugLog.log("servidor local en el puerto ${it.listeningPort}")
+                selfTest(ctx, it.listeningPort)
             }
         } catch (e: Exception) {
             error = "No se pudo iniciar el servidor local: ${e.message}"
             DebugLog.log("servidor local falló: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
+    }
+
+    /** Comprueba que el servidor local acepta conexiones en la IP de la Wi-Fi (descarta que escuche solo en loopback). */
+    private fun selfTest(ctx: Context, port: Int) {
+        Thread {
+            val ip = localLanIp(ctx)
+            val ok = ip != null && try {
+                Socket().use { it.connect(InetSocketAddress(ip, port), 1500) }
+                true
+            } catch (e: Exception) { false }
+            DebugLog.log("autoprueba del servidor local ($ip:$port): ${if (ok) "responde" else "NO responde"}")
+        }.start()
     }
 
     private fun stopRelay() {

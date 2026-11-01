@@ -78,6 +78,18 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                 var showLog by remember { mutableStateOf(false) }
                 if (showLog) CastLogDialog { showLog = false }
                 Button(onClick = { showLog = true }) { Text("Ver registro de diagnóstico") }
+                Button(onClick = {
+                    try {
+                        ctx.startActivity(Intent("android.settings.CAST_SETTINGS"))
+                    } catch (e: Exception) {
+                        try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)) } catch (_: Exception) {}
+                    }
+                }) { Text("Duplicar pantalla (Android)") }
+                Text(
+                    "Alternativa si un canal no se puede enviar: muestra en la tele lo que ves en el móvil.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text("Siempre por el móvil")
