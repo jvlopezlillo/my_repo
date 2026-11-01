@@ -111,13 +111,26 @@ object CastController {
     // ───────────── sondeo del formato ─────────────
     private fun resolve(url: String, client: OkHttpClient): Probe {
         var first: Probe? = null
-        for (candidate in listOfNotNull(url, xtreamHls(url)).distinct()) {
+        for (candidate in candidates(url)) {
             val p = probe(candidate, client)
             DebugLog.log("sonda ${DebugLog.redact(candidate)} → ${p.kind} http=${p.http} tipo=${p.contentType}")
             if (p.kind == Kind.HLS) return p
             if (first == null) first = p
         }
         return first!!
+    }
+
+    /** La dirección original y variantes que suelen ser HLS: Xtream (`/live/u/p/id.m3u8`) y `.ts`/sin extensión → `.m3u8`. */
+    private fun candidates(url: String): List<String> {
+        val base = url.substringBefore('?')
+        val query = url.substring(base.length)
+        val last = base.substringAfterLast('/')
+        val swapped = when {
+            base.endsWith(".ts", ignoreCase = true) -> base.dropLast(3) + ".m3u8" + query
+            !last.contains('.') && last.isNotEmpty() -> "$base.m3u8$query"
+            else -> null
+        }
+        return listOfNotNull(url, xtreamHls(url), swapped).distinct()
     }
 
     /** Muchas listas traen URLs Xtream en TS (`…/user/pass/123` o `.ts`); el mismo canal suele estar en HLS. */
@@ -158,42 +171,31 @@ object CastController {
     private fun deliver(ctx: Context, channel: Channel, p: Probe, client: OkHttpClient) {
         status = null
         val remote = castContext?.sessionManager?.currentCastSession?.remoteMediaClient ?: return
-        when (p.kind) {
-            Kind.ERROR -> {
-                error = if (p.http > 0) "El servidor del canal respondió HTTP ${p.http}"
-                else "No se pudo conectar con el canal (revisa tu VPN/proxy)"
-                return
-            }
-            Kind.TS -> {
-                error = "Este canal emite MPEG-TS directo y el Chromecast solo reproduce HLS (.m3u8). " +
-                    "Prueba con otro canal o con una lista Xtream."
-                DebugLog.log("canal en MPEG-TS directo: el Chromecast no lo admite")
-                return
-            }
-            else -> {}
+        if (p.kind == Kind.ERROR) {
+            error = if (p.http > 0) "El servidor del canal respondió HTTP ${p.http}"
+            else "No se pudo conectar con el canal (revisa tu VPN/proxy)"
+            return
+        }
+        val convertTs = p.kind == Kind.TS
+        if (convertTs && !relayEnabled) {
+            error = "Este canal es MPEG-TS directo: activa «Retransmitir por el móvil» para convertirlo a HLS."
+            DebugLog.log("canal TS directo con la retransmisión desactivada")
+            return
         }
 
-        val contentType = if (p.kind == Kind.HLS) "application/x-mpegURL" else (p.contentType?.substringBefore(';') ?: "video/mp4")
+        val contentType = if (p.kind == Kind.HLS || convertTs) "application/x-mpegURL" else (p.contentType?.substringBefore(';') ?: "video/mp4")
         val contentUrl = if (relayEnabled) {
             val ip = localLanIp(ctx)
             DebugLog.log("IP local del móvil: $ip · VPN=${vpnActive(ctx)}")
             if (ip == null) { error = "No se encontró la red Wi-Fi del móvil"; return }
-            val r = relay?.also { it.client = client } ?: try {
-                CastRelay(client).also {
-                    it.start(30_000, true)
-                    relay = it
-                    ContextCompat.startForegroundService(ctx, Intent(ctx, CastRelayService::class.java))
-                    DebugLog.log("servidor local en el puerto ${it.listeningPort}")
-                }
-            } catch (e: Exception) {
-                error = "No se pudo iniciar el servidor local: ${e.message}"
-                DebugLog.log("servidor local falló: ${e.javaClass.simpleName}: ${e.message}")
-                return
-            }
-            r.urlFor(ip, p.url)
+            val r = ensureRelay(ctx, client) ?: return
+            if (convertTs) {
+                DebugLog.log("canal MPEG-TS directo: se convierte a HLS en el móvil")
+                r.tsUrl(ip, r.startTs(p.url))
+            } else r.urlFor(ip, p.url)
         } else p.url
 
-        DebugLog.log("load: tipo=$contentType retransmisión=$relayEnabled → ${DebugLog.redact(contentUrl)}")
+        DebugLog.log("load: tipo=$contentType retransmisión=$relayEnabled tsAHls=$convertTs → ${DebugLog.redact(contentUrl)}")
         val meta = MediaMetadata(MediaMetadata.MEDIA_TYPE_GENERIC).apply {
             putString(MediaMetadata.KEY_TITLE, channel.name)
             putString(MediaMetadata.KEY_SUBTITLE, channel.group)
@@ -209,6 +211,22 @@ object CastController {
                 DebugLog.log("load → código=${res.status.statusCode} ${res.status.statusMessage ?: ""} datos=${res.customData}")
                 if (!res.status.isSuccess) error = "El Chromecast rechazó el canal (código ${res.status.statusCode})"
             }
+    }
+
+    private fun ensureRelay(ctx: Context, client: OkHttpClient): CastRelay? {
+        relay?.let { it.client = client; return it }
+        return try {
+            CastRelay(client).also {
+                it.start(30_000, true)
+                relay = it
+                ContextCompat.startForegroundService(ctx, Intent(ctx, CastRelayService::class.java))
+                DebugLog.log("servidor local en el puerto ${it.listeningPort}")
+            }
+        } catch (e: Exception) {
+            error = "No se pudo iniciar el servidor local: ${e.message}"
+            DebugLog.log("servidor local falló: ${e.javaClass.simpleName}: ${e.message}")
+            null
+        }
     }
 
     private fun stopRelay() {

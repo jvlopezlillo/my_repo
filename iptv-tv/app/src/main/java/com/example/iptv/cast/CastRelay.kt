@@ -30,6 +30,43 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
     private val secret = ByteArray(32).also { SecureRandom().nextBytes(it) }
     private val b64 = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
 
+    private val tsSessions = java.util.concurrent.ConcurrentHashMap<String, TsHlsSession>()
+
+    /** Empieza a convertir un directo MPEG-TS a HLS; devuelve el identificador de la sesión. Solo hay una a la vez. */
+    fun startTs(target: String): String {
+        tsSessions.values.forEach { it.stop() }
+        tsSessions.clear()
+        val id = java.util.UUID.randomUUID().toString().replace("-", "")
+        tsSessions[id] = TsHlsSession(target, client).also { it.start() }
+        return id
+    }
+
+    fun tsUrl(host: String, id: String): String = "http://$host:$listeningPort/t/$id/index.m3u8"
+
+    private fun serveTs(uri: String): Response {
+        val parts = uri.removePrefix("/t/").split('/')
+        val s = tsSessions[parts[0]] ?: return cors(newFixedLengthResponse(Status.NOT_FOUND, "text/plain", "Sesión desconocida"))
+        val file = parts.getOrNull(1) ?: ""
+        if (file == "index.m3u8") {
+            val pl = s.playlist()
+                ?: return cors(newFixedLengthResponse(Status.SERVICE_UNAVAILABLE, "text/plain", "Aún no hay segmentos"))
+            DebugLog.log("TS→HLS lista servida (${pl.lines().count { it.startsWith("seg-") }} segmentos)")
+            val out = newFixedLengthResponse(Status.OK, "application/vnd.apple.mpegurl", pl)
+            out.addHeader("Cache-Control", "no-cache")
+            return cors(out)
+        }
+        val n = Regex("""seg-(\d+)\.ts""").matchEntire(file)?.groupValues?.get(1)?.toIntOrNull()
+        val data = n?.let { s.segment(it) }
+            ?: return cors(newFixedLengthResponse(Status.NOT_FOUND, "text/plain", "Segmento no disponible"))
+        return cors(newFixedLengthResponse(Status.OK, "video/mp2t", java.io.ByteArrayInputStream(data), data.size.toLong()))
+    }
+
+    override fun stop() {
+        tsSessions.values.forEach { it.stop() }
+        tsSessions.clear()
+        super.stop()
+    }
+
     fun urlFor(host: String, target: String): String = "http://$host:$listeningPort${path(target)}"
 
     private fun sig(s: String): String {
@@ -57,6 +94,7 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         if (session.method != Method.GET && session.method != Method.HEAD) {
             return cors(newFixedLengthResponse(Status.METHOD_NOT_ALLOWED, "text/plain", "Método no permitido"))
         }
+        if (session.uri.startsWith("/t/")) return serveTs(session.uri)
         val target = decode(session.uri)
         if (target == null) {
             DebugLog.log("relay ✗ ${session.remoteIpAddress} petición no firmada: ${session.uri.take(40)}")
