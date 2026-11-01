@@ -1,6 +1,5 @@
 package com.castbrowser
 
-import com.sun.net.httpserver.HttpServer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,7 +10,6 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.net.HttpURLConnection
 import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.security.KeyStore
@@ -130,26 +128,39 @@ class ProtocolTest {
     @Test
     fun proxyServesRewrittenPlaylistAndRanges() {
         val seenReferer = arrayOfNulls<String>(1)
-        val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
-        server.createContext("/v/index.m3u8") { ex ->
-            seenReferer[0] = ex.requestHeaders.getFirst("Referer")
-            val b = "#EXTM3U\n#EXTINF:4,\nseg.ts\n".toByteArray()
-            ex.responseHeaders.add("Content-Type", "application/vnd.apple.mpegurl")
-            ex.sendResponseHeaders(200, b.size.toLong()); ex.responseBody.use { it.write(b) }
-        }
-        server.createContext("/v/seg.ts") { ex ->
-            val data = ByteArray(1000) { (it % 256).toByte() }
-            if (ex.requestHeaders.getFirst("Range") == "bytes=10-19") {
-                ex.responseHeaders.add("Content-Range", "bytes 10-19/1000")
-                ex.sendResponseHeaders(206, 10); ex.responseBody.use { it.write(data, 10, 10) }
-            } else {
-                ex.sendResponseHeaders(200, data.size.toLong()); ex.responseBody.use { it.write(data) }
+        // Servidor HTTP mínimo (el de la JDK no está disponible en los tests de Android).
+        val server = java.net.ServerSocket(0, 10, InetAddress.getLoopbackAddress())
+        Thread {
+            while (!server.isClosed) {
+                val s = try { server.accept() } catch (_: Exception) { break }
+                s.use { sock ->
+                    val r = sock.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+                    val path = r.readLine().split(' ')[1]
+                    val h = HashMap<String, String>()
+                    while (true) {
+                        val l = r.readLine() ?: break
+                        if (l.isEmpty()) break
+                        h[l.substringBefore(':').lowercase()] = l.substringAfter(':').trim()
+                    }
+                    val out = sock.getOutputStream()
+                    fun respond(code: Int, headers: String, body: ByteArray) {
+                        out.write(("HTTP/1.1 $code X\r\nContent-Length: ${body.size}\r\n${headers}Connection: close\r\n\r\n").toByteArray())
+                        out.write(body); out.flush()
+                    }
+                    if (path == "/v/index.m3u8") {
+                        seenReferer[0] = h["referer"]
+                        respond(200, "Content-Type: application/vnd.apple.mpegurl\r\n", "#EXTM3U\n#EXTINF:4,\nseg.ts\n".toByteArray())
+                    } else {
+                        val data = ByteArray(1000) { (it % 256).toByte() }
+                        if (h["range"] == "bytes=10-19") respond(206, "Content-Range: bytes 10-19/1000\r\n", data.copyOfRange(10, 20))
+                        else respond(200, "", data)
+                    }
+                }
             }
-        }
-        server.start()
+        }.apply { isDaemon = true }.start()
         val proxy = MediaProxy(InetAddress.getLoopbackAddress()) { "session=1" }
         try {
-            val origin = "http://127.0.0.1:${server.address.port}"
+            val origin = "http://127.0.0.1:${server.localPort}"
             val url = proxy.rewriter.proxify("$origin/v/index.m3u8", mapOf("Referer" to "https://page.com/"))
             val c = URL(url).openConnection() as HttpURLConnection
             c.setRequestProperty("Connection", "close")
@@ -167,7 +178,7 @@ class ProtocolTest {
             assertEquals(10.toByte(), bytes[0])
         } finally {
             proxy.close()
-            server.stop(0)
+            server.close()
         }
     }
 
