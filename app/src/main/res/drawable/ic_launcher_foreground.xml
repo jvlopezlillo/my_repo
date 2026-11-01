@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Escoba con destellos, centrada en la zona segura de 66dp -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- mango -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M64,30 L68,32 L56,56 L52,54 Z" />
+    <!-- cepillo -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,52 L60,58 L56,78 L36,68 Z" />
+    <!-- destellos -->
+    <path
+        android:fillColor="#C8F7DC"
+        android:pathData="M72,58 L74,63 L79,65 L74,67 L72,72 L70,67 L65,65 L70,63 Z" />
+    <path
+        android:fillColor="#C8F7DC"
+        android:pathData="M38,36 L39.5,40 L43.5,41.5 L39.5,43 L38,47 L36.5,43 L32.5,41.5 L36.5,40 Z" />
+</vector>
