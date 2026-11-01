@@ -80,15 +80,16 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                 Button(onClick = { showLog = true }) { Text("Ver registro de diagnóstico") }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text("Retransmitir por el móvil")
+                        Text("Siempre por el móvil")
                         Text(
-                            "El móvil descarga el vídeo (con tu VPN/proxy) y se lo pasa al Chromecast. " +
-                                "Recomendado; el móvil debe seguir encendido y en la misma Wi-Fi.",
+                            "Por defecto el canal se envía directo al Chromecast (más rápido y sin gastar batería) " +
+                                "y el móvil solo hace de puente si hay VPN/proxy, si el canal es MPEG-TS o si el directo falla. " +
+                                "Actívalo para usar siempre el móvil.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(CastController.relayEnabled, { CastController.updateRelayEnabled(it) })
+                    Switch(CastController.forceRelay, { CastController.updateForceRelay(it) })
                 }
             }
         },

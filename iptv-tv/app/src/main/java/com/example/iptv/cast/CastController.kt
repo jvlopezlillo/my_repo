@@ -27,13 +27,15 @@ import okhttp3.Request
 import java.net.Inet4Address
 
 /**
- * Envío a Chromecast (Google Cast). Dos modos:
- *  - Retransmitir por el móvil (por defecto): el móvil descarga el vídeo —por la VPN/proxy que tenga— y se lo
- *    sirve al Chromecast por la Wi-Fi local, con CORS.
- *  - Directo: se le da la URL original al Chromecast, que la descarga él mismo.
+ * Envío a Chromecast (Google Cast).
  *
- * Antes de enviar se "sonda" el canal para saber qué formato sirve de verdad (HLS, MPEG-TS directo…):
- * el Chromecast solo reproduce HLS, y declararle un formato equivocado deja la pantalla sin vídeo.
+ * Dos caminos para un canal HLS:
+ *  - DIRECTO: se le da la URL al Chromecast, que la descarga él mismo (rápido, sin gastar batería del móvil).
+ *  - POR EL MÓVIL: el móvil descarga el vídeo —por la VPN/proxy que tenga— y se lo sirve al Chromecast por la
+ *    Wi-Fi local, con CORS. Imprescindible para MPEG-TS directo (se convierte a HLS) y cuando hay VPN/proxy.
+ *
+ * Modo automático: se empieza por DIRECTO (salvo VPN/proxy/TS/"forzar") y, si el Chromecast no avanza, se prueba
+ * el otro camino. Se recuerda qué Chromecast no consigue conectar con el móvil para no volver a intentarlo.
  */
 object CastController {
     var available by mutableStateOf(false)
@@ -43,7 +45,7 @@ object CastController {
     var error by mutableStateOf<String?>(null)
     var status by mutableStateOf<String?>(null)
         private set
-    var relayEnabled by mutableStateOf(true)
+    var forceRelay by mutableStateOf(false)
         private set
 
     private var appCtx: Context? = null
@@ -54,14 +56,27 @@ object CastController {
     private var statusOwner: RemoteMediaClient? = null
 
     private enum class Kind { HLS, TS, OTHER, ERROR }
+    private enum class Mode { DIRECT, RELAY }
     private class Probe(val url: String, val kind: Kind, val http: Int, val contentType: String?)
+
+    /** Estado de un envío: qué caminos se han probado y si el Chromecast ha avanzado. */
+    private class Attempt(val token: Int, val channel: Channel, val probe: Probe, val client: OkHttpClient) {
+        var mode = Mode.DIRECT
+        var triedDirect = false
+        var triedRelay = false
+        var progressed = false
+        var finished = false
+    }
+    private var attempt: Attempt? = null
+
+    private fun prefs() = appCtx?.getSharedPreferences("iptv", Context.MODE_PRIVATE)
 
     /** Solo en móvil/tablet con Google Play Services. En Android TV / Fire TV no se llama o no está disponible. */
     fun init(context: Context) {
         if (castContext != null) return
         val app = context.applicationContext
         appCtx = app
-        relayEnabled = app.getSharedPreferences("iptv", Context.MODE_PRIVATE).getBoolean("cast_relay", true)
+        forceRelay = prefs()?.getBoolean("cast_force_relay", false) ?: false
         try {
             if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(app) != ConnectionResult.SUCCESS) {
                 DebugLog.log("Google Play Services no disponible: Cast desactivado")
@@ -72,36 +87,41 @@ object CastController {
             cc.sessionManager.addSessionManagerListener(listener, CastSession::class.java)
             cc.sessionManager.currentCastSession?.let { attach(it) }
             available = true
-            DebugLog.log("Cast listo (modo retransmisión=${relayEnabled}, VPN=${vpnActive(app)})")
+            DebugLog.log("Cast listo (retransmisión forzada=$forceRelay, VPN=${vpnActive(app)})")
         } catch (e: Exception) {
             available = false
             DebugLog.log("Error iniciando Cast: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
-    fun updateRelayEnabled(value: Boolean) {
-        relayEnabled = value
-        appCtx?.getSharedPreferences("iptv", Context.MODE_PRIVATE)?.edit()?.putBoolean("cast_relay", value)?.apply()
-        DebugLog.log("Modo retransmisión por el móvil: $value")
+    fun updateForceRelay(value: Boolean) {
+        forceRelay = value
+        prefs()?.edit()?.putBoolean("cast_force_relay", value)?.apply()
+        DebugLog.log("Retransmisión por el móvil forzada: $value")
     }
 
-    /** Envía el canal al Chromecast conectado. [client] es el cliente HTTP del vídeo (con el proxy si está activo). */
-    fun load(channel: Channel, client: OkHttpClient) {
+    /**
+     * Envía el canal al Chromecast conectado. [client] es el cliente HTTP del vídeo (con el proxy si está activo);
+     * [viaProxy] indica que el usuario quiere que el vídeo salga por el proxy de la app (entonces se usa el móvil de puente).
+     */
+    fun load(channel: Channel, client: OkHttpClient, viaProxy: Boolean = false) {
         val ctx = appCtx ?: return
         if (castContext?.sessionManager?.currentCastSession?.remoteMediaClient == null) return
         error = null
         status = "Preparando el canal…"
         val token = ++loadToken
+        attempt = null
         DebugLog.log("── Enviar «${channel.name}» · ${DebugLog.redact(channel.url)}")
         Thread {
             val probe = resolve(channel.url, client)
-            main.post { if (token == loadToken) deliver(ctx, channel, probe, client, token) }
+            main.post { if (token == loadToken) deliver(ctx, channel, probe, client, token, viaProxy) }
         }.start()
     }
 
     fun disconnect() {
         DebugLog.log("Desconectando del Chromecast")
         loadToken++
+        attempt = null
         castContext?.sessionManager?.endCurrentSession(true)
         connectedName = null
         status = null
@@ -168,71 +188,107 @@ object CastController {
     }
 
     // ───────────── envío ─────────────
-    private fun deliver(ctx: Context, channel: Channel, p: Probe, client: OkHttpClient, token: Int) {
+    private fun deliver(ctx: Context, channel: Channel, p: Probe, client: OkHttpClient, token: Int, viaProxy: Boolean) {
         status = null
-        val remote = castContext?.sessionManager?.currentCastSession?.remoteMediaClient ?: return
         if (p.kind == Kind.ERROR) {
             error = if (p.http > 0) "El servidor del canal respondió HTTP ${p.http}"
             else "No se pudo conectar con el canal (revisa tu VPN/proxy)"
             return
         }
+        val att = Attempt(token, channel, p, client)
+        attempt = att
         val convertTs = p.kind == Kind.TS
-        if (convertTs && !relayEnabled) {
-            error = "Este canal es MPEG-TS directo: activa «Retransmitir por el móvil» para convertirlo a HLS."
-            DebugLog.log("canal TS directo con la retransmisión desactivada")
-            return
+        val wantsRelay = forceRelay || viaProxy || vpnActive(ctx)
+        val first = when {
+            convertTs -> Mode.RELAY                        // el MPEG-TS directo solo se puede convertir en el móvil
+            relayUnreachable() -> Mode.DIRECT              // ya sabemos que este Chromecast no llega al móvil
+            wantsRelay -> Mode.RELAY
+            else -> Mode.DIRECT
         }
+        DebugLog.log("modo inicial: $first (forzado=$forceRelay proxy=$viaProxy vpn=${vpnActive(ctx)} ts=$convertTs inalcanzable=${relayUnreachable()})")
+        send(att, first)
+    }
 
-        val contentType = if (p.kind == Kind.HLS || convertTs) "application/x-mpegURL" else (p.contentType?.substringBefore(';') ?: "video/mp4")
-        var usedRelay: CastRelay? = null
-        val contentUrl = if (relayEnabled) {
+    private fun send(att: Attempt, mode: Mode) {
+        val ctx = appCtx ?: return
+        val remote = castContext?.sessionManager?.currentCastSession?.remoteMediaClient ?: return
+        val p = att.probe
+        val convertTs = p.kind == Kind.TS
+        att.mode = mode
+        att.progressed = false
+
+        val url: String
+        if (mode == Mode.RELAY) {
+            att.triedRelay = true
             val ip = localLanIp(ctx)
             DebugLog.log("IP local del móvil: $ip · VPN=${vpnActive(ctx)}")
-            if (ip == null) { error = "No se encontró la red Wi-Fi del móvil"; return }
-            val r = ensureRelay(ctx, client) ?: return
-            usedRelay = r
-            if (convertTs) {
+            if (ip == null) { fail(att, "No se encontró la red Wi-Fi del móvil"); return }
+            val r = ensureRelay(ctx, att.client) ?: run { att.finished = true; return }
+            url = if (convertTs) {
                 DebugLog.log("canal MPEG-TS directo: se convierte a HLS en el móvil")
                 r.tsUrl(ip, r.startTs(p.url))
             } else r.urlFor(ip, p.url)
-        } else p.url
-
-        DebugLog.log("load: tipo=$contentType retransmisión=$relayEnabled tsAHls=$convertTs → ${DebugLog.redact(contentUrl)}")
-        val meta = MediaMetadata(MediaMetadata.MEDIA_TYPE_GENERIC).apply {
-            putString(MediaMetadata.KEY_TITLE, channel.name)
-            putString(MediaMetadata.KEY_SUBTITLE, channel.group)
+            status = "Enviando por el móvil…"
+            val before = r.requestCount.get()
+            main.postDelayed({
+                if (attempt !== att || att.mode != Mode.RELAY || att.progressed || att.finished) return@postDelayed
+                if (r.requestCount.get() != before) return@postDelayed // sí ha contactado: se deja avanzar
+                DebugLog.log("el Chromecast no ha contactado con el móvil en 6 s (¿aislamiento de red / VLAN?)")
+                markRelay(false)
+                if (!att.triedDirect && !convertTs) send(att, Mode.DIRECT)
+                else fail(att, "El Chromecast no consigue conectar con el móvil por la Wi-Fi (¿red de invitados, aislamiento de clientes o VLAN?). " +
+                    "Este canal necesita esa conexión para convertirse a HLS.")
+            }, 6_000)
+        } else {
+            att.triedDirect = true
+            url = p.url
+            status = "Enviando directamente al Chromecast…"
+            main.postDelayed({
+                if (attempt !== att || att.mode != Mode.DIRECT || att.progressed || att.finished) return@postDelayed
+                DebugLog.log("sin progreso en 15 s con el envío directo")
+                if (!att.triedRelay && !relayUnreachable()) send(att, Mode.RELAY)
+                else fail(att, "El Chromecast no consigue abrir el canal.")
+            }, 15_000)
         }
-        val info = MediaInfo.Builder(contentUrl)
-            .setContentUrl(contentUrl)
+
+        val contentType = if (p.kind == Kind.HLS || convertTs) "application/x-mpegURL" else (p.contentType?.substringBefore(';') ?: "video/mp4")
+        DebugLog.log("load [$mode]: tipo=$contentType → ${DebugLog.redact(url)}")
+        val meta = MediaMetadata(MediaMetadata.MEDIA_TYPE_GENERIC).apply {
+            putString(MediaMetadata.KEY_TITLE, att.channel.name)
+            putString(MediaMetadata.KEY_SUBTITLE, att.channel.group)
+        }
+        val info = MediaInfo.Builder(url)
+            .setContentUrl(url)
             .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
             .setContentType(contentType)
             .setMetadata(meta)
             .build()
         remote.load(MediaLoadRequestData.Builder().setMediaInfo(info).setAutoplay(true).build())
             .setResultCallback { res ->
-                DebugLog.log("load → código=${res.status.statusCode} ${res.status.statusMessage ?: ""} datos=${res.customData}")
-                if (!res.status.isSuccess) error = "El Chromecast rechazó el canal (código ${res.status.statusCode})"
+                DebugLog.log("load [$mode] → código=${res.status.statusCode} ${res.status.statusMessage ?: ""} datos=${res.customData}")
+                if (!res.status.isSuccess && attempt === att) fail(att, "El Chromecast rechazó el canal (código ${res.status.statusCode})")
             }
+    }
 
-        // Salvaguarda: si el Chromecast no contacta con el móvil, no es un problema del canal sino de la red.
-        usedRelay?.let { r ->
-            val before = r.requestCount.get()
-            main.postDelayed({
-                if (token != loadToken || connectedName == null || r.requestCount.get() != before) return@postDelayed
-                DebugLog.log("el Chromecast no ha contactado con el móvil en 12 s (¿aislamiento de red / VLAN?)")
-                if (!convertTs) {
-                    DebugLog.log("probando el envío directo (el Chromecast descarga el canal por su cuenta)")
-                    error = "El Chromecast no llega al móvil por la red local; probando el envío directo…"
-                    val direct = MediaInfo.Builder(p.url).setContentUrl(p.url).setStreamType(MediaInfo.STREAM_TYPE_LIVE)
-                        .setContentType("application/x-mpegURL").setMetadata(meta).build()
-                    castContext?.sessionManager?.currentCastSession?.remoteMediaClient
-                        ?.load(MediaLoadRequestData.Builder().setMediaInfo(direct).setAutoplay(true).build())
-                        ?.setResultCallback { res -> DebugLog.log("load directo → código=${res.status.statusCode} datos=${res.customData}") }
-                } else {
-                    error = "El Chromecast no consigue conectar con el móvil por la Wi-Fi (¿red de invitados, aislamiento de clientes o VLAN?). " +
-                        "Este canal necesita esa conexión para convertirse a HLS."
-                }
-            }, 12_000)
+    private fun fail(att: Attempt, message: String) {
+        att.finished = true
+        status = null
+        error = message
+    }
+
+    /** El Chromecast ha devuelto un error de reproducción: se prueba el otro camino si queda alguno. */
+    private fun fallbackFromError(att: Attempt) {
+        val ts = att.probe.kind == Kind.TS
+        when {
+            att.mode == Mode.DIRECT && !att.triedRelay && !relayUnreachable() -> {
+                DebugLog.log("error en el envío directo: se prueba por el móvil")
+                send(att, Mode.RELAY)
+            }
+            att.mode == Mode.RELAY && !att.triedDirect && !ts -> {
+                DebugLog.log("error en el envío por el móvil: se prueba el directo")
+                send(att, Mode.DIRECT)
+            }
+            else -> fail(att, "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo.")
         }
     }
 
@@ -256,6 +312,23 @@ object CastController {
         relay?.stop()
         relay = null
         appCtx?.let { it.stopService(Intent(it, CastRelayService::class.java)) }
+    }
+
+    // ───────────── memoria: Chromecast que no llegan al móvil ─────────────
+    private fun relayUnreachable(): Boolean {
+        val name = connectedName ?: return false
+        return prefs()?.getStringSet("cast_relay_unreachable", emptySet())?.contains(name) == true
+    }
+
+    private fun markRelay(reachable: Boolean) {
+        val name = connectedName ?: return
+        val p = prefs() ?: return
+        val set = (p.getStringSet("cast_relay_unreachable", emptySet()) ?: emptySet()).toMutableSet()
+        val changed = if (reachable) set.remove(name) else set.add(name)
+        if (changed) {
+            p.edit().putStringSet("cast_relay_unreachable", set).apply()
+            DebugLog.log(if (reachable) "«$name» sí llega al móvil" else "«$name» no llega al móvil: se usará el envío directo")
+        }
     }
 
     /** IP del móvil en la red local (Wi-Fi/Ethernet), ignorando la VPN. */
@@ -299,10 +372,23 @@ object CastController {
         override fun onStatusUpdated() {
             val st = castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.mediaStatus ?: return
             DebugLog.log("Chromecast: estado=${stateName(st.playerState)} motivoParada=${idleName(st.idleReason)}")
-            if (st.playerState == MediaStatus.PLAYER_STATE_IDLE && st.idleReason == MediaStatus.IDLE_REASON_ERROR) {
-                error = "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo."
-            } else if (st.playerState == MediaStatus.PLAYER_STATE_PLAYING) {
-                error = null
+            val att = attempt
+            when {
+                st.playerState == MediaStatus.PLAYER_STATE_PLAYING -> {
+                    error = null
+                    status = null
+                    if (att != null && !att.finished) {
+                        att.progressed = true
+                        att.finished = true
+                        DebugLog.log("reproduciendo [${att.mode}]")
+                        if (att.mode == Mode.RELAY) markRelay(true)
+                    }
+                }
+                st.playerState == MediaStatus.PLAYER_STATE_BUFFERING -> att?.progressed = true
+                st.playerState == MediaStatus.PLAYER_STATE_IDLE && st.idleReason == MediaStatus.IDLE_REASON_ERROR -> {
+                    if (att != null && !att.finished) fallbackFromError(att)
+                    else error = "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo."
+                }
             }
         }
     }
@@ -337,6 +423,7 @@ object CastController {
         override fun onSessionEnded(s: CastSession, code: Int) {
             DebugLog.log("Sesión Cast: terminada (código $code)")
             connectedName = null
+            attempt = null
             stopRelay()
         }
         override fun onSessionResuming(s: CastSession, sessionId: String) {}

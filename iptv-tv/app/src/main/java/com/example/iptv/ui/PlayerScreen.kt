@@ -86,7 +86,7 @@ fun PlayerScreen(vm: MainViewModel) {
         if (castName != null) {
             player.stop()
             player.clearMediaItems()
-            CastController.load(channel, vm.videoClient())
+            CastController.load(channel, vm.videoClient(), viaProxy = vm.proxy.enabled && vm.proxy.forVideo)
         } else {
             player.setMediaItem(MediaItem.fromUri(channel.url))
             player.prepare()
