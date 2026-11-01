@@ -39,7 +39,7 @@ class CastClient(
     private val onStatus: (CastStatus) -> Unit,
     private val onClosed: (String?) -> Unit,
     private val log: (String) -> Unit = {},
-) {
+) : Renderer {
     companion object {
         const val DEFAULT_MEDIA_RECEIVER = "CC1AD845"
         private const val SENDER = "sender-0"
@@ -73,11 +73,11 @@ class CastClient(
     @Volatile var transportId: String? = null; private set
     @Volatile var sessionId: String? = null; private set
     @Volatile var mediaSessionId: Int = -1; private set
-    @Volatile var lastStatus = CastStatus(); private set
+    @Volatile override var lastStatus = CastStatus(); private set
 
     val isConnected: Boolean get() = !closed && socket?.isConnected == true
 
-    fun connect() {
+    override fun connect() {
         val raw = rawSocket(host, port)
         raw.soTimeout = 0
         socket = tlsWrap(raw, host, port)
@@ -102,13 +102,14 @@ class CastClient(
             .put("connectionType", 1))
 
     /** Lanza el Default Media Receiver y carga el vídeo. Bloquea hasta que empieza o falla. */
-    fun load(
+    override fun load(
         url: String,
         contentType: String,
         title: String,
         startTime: Double,
         live: Boolean,
         hlsFmp4: Boolean,
+        headers: Map<String, String>,
     ) {
         playing = false
         launchReceiver()
@@ -223,11 +224,11 @@ class CastClient(
         throw CastException("La TV no llegó a abrir el reproductor de Chromecast en 45 s")
     }
 
-    fun play() = mediaCommand("PLAY")
-    fun pause() = mediaCommand("PAUSE")
-    fun seek(seconds: Double) = mediaCommand("SEEK", JSONObject().put("currentTime", maxOf(0.0, seconds)))
+    override fun play() = mediaCommand("PLAY")
+    override fun pause() = mediaCommand("PAUSE")
+    override fun seek(seconds: Double) = mediaCommand("SEEK", JSONObject().put("currentTime", maxOf(0.0, seconds)))
 
-    fun setVolume(level: Double) {
+    override fun setVolume(level: Double) {
         send(CastNs.RECEIVER, RECEIVER, JSONObject()
             .put("type", "SET_VOLUME")
             .put("requestId", requestId.getAndIncrement())
@@ -235,7 +236,7 @@ class CastClient(
     }
 
     /** Cierra la app del Chromecast y la conexión. */
-    fun stop() {
+    override fun stop() {
         try {
             sessionId?.let {
                 send(CastNs.RECEIVER, RECEIVER, JSONObject()

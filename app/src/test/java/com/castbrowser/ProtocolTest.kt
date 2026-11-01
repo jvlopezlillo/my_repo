@@ -255,10 +255,10 @@ class ProtocolTest {
         )
         client.connect()
         val failed = try {
-            client.load("https://x.com/fail.mp4", "video/mp4", "Peli", 0.0, live = false, hlsFmp4 = false); false
+            client.load("https://x.com/fail.mp4", "video/mp4", "Peli", 0.0, live = false, hlsFmp4 = false, headers = emptyMap()); false
         } catch (_: CastException) { true }
         assertTrue("un LOAD_FAILED tras un estado intermedio debe contar como fallo", failed)
-        client.load("http://10.0.0.2/o1/index.m3u8", "application/x-mpegURL", "Peli", 12.0, live = false, hlsFmp4 = true)
+        client.load("http://10.0.0.2/o1/index.m3u8", "application/x-mpegURL", "Peli", 12.0, live = false, hlsFmp4 = true, headers = emptyMap())
 
         assertEquals("web-5", client.transportId)
         assertEquals(7, client.mediaSessionId)

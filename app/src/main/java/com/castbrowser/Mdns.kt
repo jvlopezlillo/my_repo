@@ -15,6 +15,8 @@ data class MdnsCast(
 /** Construcción y lectura mínimas de paquetes DNS / mDNS (RFC 1035 / 6762). */
 object Mdns {
     const val SERVICE = "_googlecast._tcp.local"
+    /** Servicio que anuncia nuestra app receptora para Android TV. */
+    const val TV_SERVICE = "_castbrowser._tcp.local"
     const val GROUP = "224.0.0.251"
     const val PORT = 5353
 
@@ -73,7 +75,7 @@ object Mdns {
     }
 
     /** Devuelve los Chromecast descritos en un paquete de respuesta mDNS. */
-    fun parseResponse(packet: ByteArray, sourceIp: String? = null): List<MdnsCast> {
+    fun parseResponse(packet: ByteArray, sourceIp: String? = null, service: String = SERVICE): List<MdnsCast> {
         val ptrs = mutableListOf<String>()
         val srv = HashMap<String, Pair<String, Int>>()
         val txt = HashMap<String, Map<String, String>>()
@@ -94,7 +96,7 @@ object Mdns {
                 val rdLen = r.u16()
                 val start = r.pos
                 when (type) {
-                    TYPE_PTR -> if (name.equals(SERVICE, true)) ptrs.add(r.name())
+                    TYPE_PTR -> if (name.equals(service, true)) ptrs.add(r.name())
                     TYPE_SRV -> {
                         r.u16(); r.u16()
                         val port = r.u16()
@@ -124,10 +126,10 @@ object Mdns {
 
         val instances = LinkedHashSet<String>()
         ptrs.forEach { instances.add(it) }
-        srv.keys.filter { it.endsWith(SERVICE.lowercase()) }.forEach { k ->
+        srv.keys.filter { it.endsWith(service.lowercase()) }.forEach { k ->
             if (instances.none { it.lowercase() == k }) instances.add(k)
         }
-        txt.keys.filter { it.endsWith(SERVICE.lowercase()) }.forEach { k ->
+        txt.keys.filter { it.endsWith(service.lowercase()) }.forEach { k ->
             if (instances.none { it.lowercase() == k }) instances.add(k)
         }
 
@@ -137,7 +139,7 @@ object Mdns {
             val s = srv[key]
             val ip = s?.let { a[it.first.lowercase()] } ?: a.values.firstOrNull() ?: sourceIp
             val friendly = t["fn"]?.takeIf { it.isNotBlank() }
-                ?: inst.substringBefore("._googlecast").substringBeforeLast('-')
+                ?: inst.substringBefore("._").let { if (service == SERVICE) it.substringBeforeLast('-') else it }
             MdnsCast(
                 instance = inst,
                 name = friendly,

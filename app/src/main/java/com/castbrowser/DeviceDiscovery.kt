@@ -27,8 +27,31 @@ data class CastDevice(
     val model: String? = null,
     val lastSeen: Long = 0,
     val via: String = "",
+    /** cast | dlna | tv (nuestra app receptora) */
+    val type: String = TYPE_CAST,
+    val dlna: DlnaInfo? = null,
 ) {
     val available: Boolean get() = System.currentTimeMillis() - lastSeen < 3 * 60_000
+
+    val typeLabel: String
+        get() = when (type) {
+            TYPE_DLNA -> "DLNA"
+            TYPE_TV -> "App CastBrowser TV"
+            else -> "Chromecast"
+        }
+
+    val icon: String
+        get() = when (type) {
+            TYPE_DLNA -> "📡"
+            TYPE_TV -> "🟦"
+            else -> "📺"
+        }
+
+    companion object {
+        const val TYPE_CAST = "cast"
+        const val TYPE_DLNA = "dlna"
+        const val TYPE_TV = "tv"
+    }
 }
 
 /**
@@ -47,6 +70,7 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     private val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
     private var nsd: NsdManager? = null
     private var nsdListener: NsdManager.DiscoveryListener? = null
+    private var nsdTvListener: NsdManager.DiscoveryListener? = null
     private val resolveQueue = java.util.concurrent.LinkedBlockingQueue<NsdServiceInfo>()
 
     @Volatile var lastScan = 0L; private set
@@ -76,7 +100,9 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
 
     fun stop() {
         try { nsdListener?.let { nsd?.stopServiceDiscovery(it) } } catch (_: Exception) {}
+        try { nsdTvListener?.let { nsd?.stopServiceDiscovery(it) } } catch (_: Exception) {}
         nsdListener = null
+        nsdTvListener = null
     }
 
     /** Lanza una búsqueda completa (si no hay otra en curso). */
@@ -91,6 +117,7 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
             try {
                 val tasks = listOf(
                     io.submit { mdnsMulticast() },
+                    io.submit { ssdpSearch() },
                     io.submit { checkRemembered() },
                 )
                 tasks.forEach { try { it.get(8, TimeUnit.SECONDS) } catch (_: Exception) {} }
@@ -109,11 +136,14 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     /** Añade un Chromecast a mano por su IP (útil si la VPN bloquea la búsqueda). */
     fun addManual(ip: String, done: (CastDevice?) -> Unit) {
         io.execute {
-            val ok = net.isReachable(ip, 8009, 3000)
-            val dev = if (ok) {
-                val name = probeName(ip) ?: "Chromecast $ip"
-                found(CastDevice(key = "ip:$ip", name = name, ip = ip, via = "manual"))
-            } else null
+            val tv = probeTvReceiver(ip, "manual")
+            val dev = when {
+                net.isReachable(ip, 8009, 3000) -> {
+                    val name = probeName(ip) ?: "Chromecast $ip"
+                    found(CastDevice(key = "ip:$ip", name = name, ip = ip, via = "manual"))
+                }
+                else -> null
+            } ?: tv
             main.post { done(dev) }
         }
     }
@@ -133,7 +163,7 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     // ---------------------------------------------------------------- mDNS
 
     private fun mdnsMulticast() {
-        val query = Mdns.buildQuery()
+        val queries = listOf(Mdns.buildQuery(Mdns.SERVICE), Mdns.buildQuery(Mdns.TV_SERVICE))
         val group = InetAddress.getByName(Mdns.GROUP)
         val sockets = mutableListOf<DatagramSocket>()
         try {
@@ -151,7 +181,7 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
             try { sockets.add(MulticastSocket(0)) } catch (_: Exception) {}
 
             repeat(2) {
-                for (s in sockets) {
+                for (s in sockets) for (query in queries) {
                     try { s.send(DatagramPacket(query, query.size, group, Mdns.PORT)) } catch (_: Exception) {}
                 }
                 Thread.sleep(150)
@@ -182,6 +212,13 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
                         name = c.name, ip = ip, port = c.port, model = c.model, via = "wifi",
                     ))
                 }
+                for (c in Mdns.parseResponse(data, p.address.hostAddress, Mdns.TV_SERVICE)) {
+                    val ip = c.ip ?: continue
+                    found(CastDevice(
+                        key = "tv:" + (c.id ?: ip), name = c.name, ip = ip, port = c.port,
+                        model = c.model, via = "wifi", type = CastDevice.TYPE_TV,
+                    ))
+                }
             } catch (_: SocketTimeoutException) {
                 break
             } catch (_: Exception) {
@@ -190,6 +227,83 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
         }
     }
 
+    // ---------------------------------------------------------------- DLNA
+
+    /** Busca aparatos DLNA (UPnP MediaRenderer) con SSDP por la Wi-Fi. */
+    private fun ssdpSearch() {
+        val locations = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val group = InetAddress.getByName("239.255.255.250")
+        val sockets = mutableListOf<DatagramSocket>()
+        try {
+            try {
+                val s = MulticastSocket(0)
+                net.localInterfaceName()?.let { name ->
+                    NetworkInterface.getByName(name)?.let { s.networkInterface = it }
+                }
+                net.bindToLocal(s)
+                sockets.add(s)
+            } catch (_: Exception) {}
+            try { sockets.add(MulticastSocket(0)) } catch (_: Exception) {}
+            val msgs = listOf(Dlna.searchMessage(Dlna.MEDIA_RENDERER), Dlna.searchMessage(Dlna.AV_TRANSPORT))
+            repeat(2) {
+                for (s in sockets) for (m in msgs) {
+                    try { s.send(DatagramPacket(m, m.size, group, 1900)) } catch (_: Exception) {}
+                }
+                Thread.sleep(200)
+            }
+            val readers = sockets.map { s ->
+                io.submit {
+                    val buf = ByteArray(4096)
+                    val end = System.currentTimeMillis() + 3000
+                    while (true) {
+                        val left = end - System.currentTimeMillis()
+                        if (left <= 0) break
+                        try {
+                            s.soTimeout = left.toInt().coerceAtLeast(1)
+                            val p = DatagramPacket(buf, buf.size)
+                            s.receive(p)
+                            Dlna.location(String(p.data, 0, p.length, Charsets.ISO_8859_1))?.let { locations.add(it) }
+                        } catch (_: Exception) { break }
+                    }
+                }
+            }
+            readers.forEach { try { it.get(5, TimeUnit.SECONDS) } catch (_: Exception) {} }
+        } catch (_: Exception) {
+        } finally {
+            sockets.forEach { try { it.close() } catch (_: Exception) {} }
+        }
+        locations.forEach { loc -> io.execute { describeDlna(loc, "wifi") } }
+    }
+
+    private fun describeDlna(location: String, via: String): CastDevice? = try {
+        val c = net.openLocal(location) as java.net.HttpURLConnection
+        c.connectTimeout = 3000
+        c.readTimeout = 3000
+        val xml = c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+        Dlna.parseDescription(xml, location)?.let { info ->
+            val u = java.net.URI(location)
+            found(CastDevice(
+                key = "dlna:" + info.udn, name = info.name, ip = u.host,
+                port = if (u.port > 0) u.port else 80, model = info.model, via = via,
+                type = CastDevice.TYPE_DLNA, dlna = info,
+            ))
+        }
+    } catch (_: Exception) { null }
+
+    /** Comprueba si en esa IP está nuestra app receptora para Android TV. */
+    private fun probeTvReceiver(ip: String, via: String, port: Int = TvReceiverRenderer.DEFAULT_PORT): CastDevice? = try {
+        val c = net.openLocal("http://$ip:$port/info") as java.net.HttpURLConnection
+        c.connectTimeout = 800
+        c.readTimeout = 1500
+        val o = JSONObject(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+        if (o.optString("app") != "castbrowser-tv") null
+        else found(CastDevice(
+            key = "tv:" + o.optString("id", ip), name = o.optString("name", "Android TV"),
+            ip = ip, port = port, model = o.optString("model").ifEmpty { null }, via = via,
+            type = CastDevice.TYPE_TV,
+        ))
+    } catch (_: Exception) { null }
+
     // ------------------------------------------------------- Recordados
 
     private fun checkRemembered() {
@@ -197,6 +311,7 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
         devices.values.toList().forEach { d ->
             pool.execute {
                 if (net.isReachable(d.ip, d.port, 1500)) found(d.copy(via = "recordado"))
+                else if (d.type == CastDevice.TYPE_TV) probeTvReceiver(d.ip, "recordado")
             }
         }
         pool.shutdown()
@@ -228,15 +343,17 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
             }
         } catch (_: Exception) {}
 
-        // 2) Puerto 8009 abierto (para los que no respondan a mDNS).
-        val known = devices.values.map { it.ip }.toSet()
+        // 2) Puerto 8009 (Chromecast) y 8765 (nuestra app de TV) abiertos.
+        val known = devices.values.filter { it.available }.map { it.type + it.ip }.toSet()
         val pool = Executors.newFixedThreadPool(48)
         for (h in hosts) {
-            if (h in known) continue
             pool.execute {
-                if (net.isReachable(h, 8009, 500)) {
+                if (CastDevice.TYPE_CAST + h !in known && net.isReachable(h, 8009, 500)) {
                     val name = probeName(h) ?: "Chromecast $h"
                     found(CastDevice(key = "ip:$h", name = name, ip = h, via = "escaneo"))
+                }
+                if (CastDevice.TYPE_TV + h !in known && net.isReachable(h, TvReceiverRenderer.DEFAULT_PORT, 500)) {
+                    probeTvReceiver(h, "escaneo")
                 }
             }
         }
@@ -288,6 +405,22 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
         } catch (_: Exception) {
             nsdListener = null
         }
+        if (nsdTvListener == null) {
+            val t = object : NsdManager.DiscoveryListener {
+                override fun onStartDiscoveryFailed(serviceType: String?, errorCode: Int) { nsdTvListener = null }
+                override fun onStopDiscoveryFailed(serviceType: String?, errorCode: Int) {}
+                override fun onDiscoveryStarted(serviceType: String?) {}
+                override fun onDiscoveryStopped(serviceType: String?) {}
+                override fun onServiceFound(info: NsdServiceInfo) { resolveQueue.offer(info) }
+                override fun onServiceLost(info: NsdServiceInfo) {}
+            }
+            nsdTvListener = t
+            try {
+                mgr.discoverServices("_castbrowser._tcp", NsdManager.PROTOCOL_DNS_SD, t)
+            } catch (_: Exception) {
+                nsdTvListener = null
+            }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -305,6 +438,13 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
                             val fn = attrs["fn"]?.toString(Charsets.UTF_8)
                             val id = attrs["id"]?.toString(Charsets.UTF_8)
                             val md = attrs["md"]?.toString(Charsets.UTF_8)
+                            if (si.serviceType?.contains("castbrowser") == true) {
+                                found(CastDevice(
+                                    key = "tv:" + (id ?: ip), name = fn ?: si.serviceName, ip = ip, port = si.port,
+                                    model = md, via = "wifi", type = CastDevice.TYPE_TV,
+                                ))
+                                return
+                            }
                             found(CastDevice(
                                 key = id?.let { "id:$it" } ?: "ip:$ip",
                                 name = fn ?: si.serviceName, ip = ip, port = si.port, model = md, via = "wifi",
@@ -324,10 +464,10 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     private fun found(d: CastDevice): CastDevice {
         val now = System.currentTimeMillis()
         // Si ya teníamos el mismo dispositivo con otra clave (p. ej. por IP), los unimos.
-        val dup = devices.values.firstOrNull { it.key != d.key && it.ip == d.ip }
+        val dup = devices.values.firstOrNull { it.key != d.key && it.ip == d.ip && it.type == d.type }
         val key = when {
             dup == null -> d.key
-            d.key.startsWith("id:") -> { devices.remove(dup.key); d.key }
+            d.key.startsWith("id:") || d.key.startsWith("dlna:") -> { devices.remove(dup.key); d.key }
             else -> dup.key
         }
         val prev = devices[key] ?: dup
@@ -335,6 +475,7 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
             key = key,
             name = if (d.name.startsWith("Chromecast ") && prev != null) prev.name else d.name,
             model = d.model ?: prev?.model,
+            dlna = d.dlna ?: prev?.dlna,
             lastSeen = now,
         )
         devices[key] = better
@@ -356,6 +497,16 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
                     key = o.getString("key"), name = o.getString("name"), ip = o.getString("ip"),
                     port = o.optInt("port", 8009), model = o.optString("model").ifEmpty { null },
                     lastSeen = 0, via = "recordado",
+                    type = o.optString("type", CastDevice.TYPE_CAST),
+                    dlna = o.optJSONObject("dlna")?.let { j ->
+                        DlnaInfo(
+                            name = j.getString("name"), udn = j.getString("udn"),
+                            model = j.optString("model").ifEmpty { null },
+                            avControlUrl = j.getString("av"), avServiceType = j.getString("avType"),
+                            rcControlUrl = j.optString("rc").ifEmpty { null },
+                            rcServiceType = j.optString("rcType").ifEmpty { null },
+                        )
+                    },
                 )
                 devices[d.key] = d
             }
@@ -366,8 +517,14 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
     private fun saveRemembered() {
         val arr = JSONArray()
         devices.values.forEach { d ->
-            arr.put(JSONObject().put("key", d.key).put("name", d.name).put("ip", d.ip)
-                .put("port", d.port).put("model", d.model ?: ""))
+            val o = JSONObject().put("key", d.key).put("name", d.name).put("ip", d.ip)
+                .put("port", d.port).put("model", d.model ?: "").put("type", d.type)
+            d.dlna?.let { i ->
+                o.put("dlna", JSONObject().put("name", i.name).put("udn", i.udn).put("model", i.model ?: "")
+                    .put("av", i.avControlUrl).put("avType", i.avServiceType)
+                    .put("rc", i.rcControlUrl ?: "").put("rcType", i.rcServiceType ?: ""))
+            }
+            arr.put(o)
         }
         prefs.edit().putString("list", arr.toString()).apply()
     }

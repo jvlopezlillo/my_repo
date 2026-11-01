@@ -75,7 +75,7 @@ class MainActivity : Activity() {
     private var videoSeen = false
     private var userAgent = ""
 
-    @Volatile private var client: CastClient? = null
+    @Volatile private var client: Renderer? = null
     private var castDevice: CastDevice? = null
     private var proxy: MediaProxy? = null
     private var connecting = false
@@ -544,7 +544,7 @@ class MainActivity : Activity() {
         val devices = discovery.availableDevices()
         val labels = devices.map { d ->
             val extra = when (d.via) { "recordado" -> " · guardado"; "manual" -> " · manual"; else -> "" }
-            "📺  ${d.name}\n      ${d.ip}$extra"
+            "${d.icon}  ${d.name}\n      ${d.typeLabel} · ${d.ip}$extra"
         }.toTypedArray()
         val b = AlertDialog.Builder(this)
             .setTitle(if (devices.isEmpty()) "No hay Chromecast a la vista" else "Enviar a…")
@@ -627,17 +627,25 @@ class MainActivity : Activity() {
         updateCastButton()
 
         Thread {
-            var c: CastClient? = null
+            var c: Renderer? = null
             try {
                 client?.stop()
-                val self = arrayOfNulls<CastClient>(1)
-                val cc = CastClient(
-                    device.ip, device.port,
-                    rawSocket = { h, p -> net.connect(h, p, 5000) },
-                    onStatus = { s -> main.post { if (client === self[0]) showStatus(s) } },
-                    onClosed = { r -> main.post { if (client === self[0] || client == null) onCastEnded(r) } },
-                    log = ::diag,
-                )
+                val self = arrayOfNulls<Renderer>(1)
+                val onStatus: (CastStatus) -> Unit = { s -> main.post { if (client === self[0]) showStatus(s) } }
+                val onClosed: (String?) -> Unit = { r -> main.post { if (client === self[0] || client == null) onCastEnded(r) } }
+                val opener: HttpOpener = { u -> net.openLocal(u) as HttpURLConnection }
+                val cc: Renderer = when (device.type) {
+                    CastDevice.TYPE_DLNA -> DlnaRenderer(
+                        device.dlna ?: throw CastException("Faltan los datos DLNA de este aparato: búscalo de nuevo"),
+                        opener, onStatus, onClosed, ::diag,
+                    )
+                    CastDevice.TYPE_TV -> TvReceiverRenderer(device.ip, device.port, opener, onStatus, onClosed, ::diag)
+                    else -> CastClient(
+                        device.ip, device.port,
+                        rawSocket = { h, p -> net.connect(h, p, 5000) },
+                        onStatus = onStatus, onClosed = onClosed, log = ::diag,
+                    )
+                }
                 self[0] = cc
                 c = cc
                 cc.connect()
@@ -647,11 +655,13 @@ class MainActivity : Activity() {
                     else -> when (mode) {
                     "direct" -> listOf(false)
                     "proxy" -> listOf(true)
-                    else -> if (vpn || prefs.getBoolean("viaPhone:${device.key}", false)) listOf(true, false)
+                    // Las teles DLNA no pueden mandar cookies ni cabeceras: mejor a través del móvil.
+                    else -> if (vpn || device.type == CastDevice.TYPE_DLNA ||
+                        prefs.getBoolean("viaPhone:${device.key}", false)) listOf(true, false)
                     else listOf(false, true)
                     }
                 }
-                val fmp4 = cand.kind == "hls" && detectFmp4(cand.url, headers)
+                val fmp4 = device.type == CastDevice.TYPE_CAST && cand.kind == "hls" && detectFmp4(cand.url, headers)
                 if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
                 proxy?.lastUpstreamError = null
                 proxy?.rewriter?.sawDrm = false
@@ -666,7 +676,10 @@ class MainActivity : Activity() {
                     } else cand.url
                     main.post { panelStatus.text = if (useProxy) "Cargando (a través del móvil)…" else "Cargando…" }
                     try {
-                        cc.load(url, cand.contentType, title, start, live, fmp4)
+                        // Nuestra app de TV puede usar las cookies y cabeceras del navegador al ir directa.
+                        val sendHeaders = if (useProxy) emptyMap() else headers + (
+                            CookieManager.getInstance().getCookie(cand.url)?.let { mapOf("Cookie" to it) } ?: emptyMap())
+                        cc.load(url, cand.contentType, title, start, live, fmp4, sendHeaders)
                         ok = true
                         // Recordamos qué camino funciona con esta TV para probarlo primero la próxima vez.
                         if (mode == "auto" && !vpn) prefs.edit().putBoolean("viaPhone:${device.key}", useProxy).apply()
@@ -822,14 +835,14 @@ class MainActivity : Activity() {
     private fun showSaved() {
         val all = discovery.allDevices()
         if (all.isEmpty()) { toast("Todavía no hay Chromecast guardados"); return }
-        val labels = all.map { "${if (it.available) "🟢" else "⚪"}  ${it.name} (${it.ip})" }.toTypedArray()
+        val labels = all.map { "${if (it.available) "🟢" else "⚪"} ${it.icon} ${it.name} (${it.ip})" }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Chromecast guardados")
             .setItems(labels) { _, w ->
                 val d = all[w]
                 AlertDialog.Builder(this)
                     .setTitle(d.name)
-                    .setMessage("IP: ${d.ip}\nModelo: ${d.model ?: "—"}")
+                    .setMessage("Tipo: ${d.typeLabel}\nIP: ${d.ip}\nModelo: ${d.model ?: "—"}")
                     .setPositiveButton("Olvidar") { _, _ -> discovery.forget(d) }
                     .setNegativeButton("Cerrar", null)
                     .show()

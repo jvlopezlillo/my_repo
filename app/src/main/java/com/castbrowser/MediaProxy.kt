@@ -235,6 +235,11 @@ class MediaProxy(
         conn.getHeaderField("Content-Length")?.let { h["Content-Length"] = it }
         conn.getHeaderField("Content-Range")?.let { h["Content-Range"] = it }
         h["Accept-Ranges"] = conn.getHeaderField("Accept-Ranges") ?: "bytes"
+        // Algunas teles DLNA (Samsung, LG…) piden estas cabeceras para reproducir en streaming.
+        if (reqHeaders.containsKey("getcontentfeatures.dlna.org")) {
+            h["contentFeatures.dlna.org"] = "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+        }
+        if (reqHeaders.containsKey("transfermode.dlna.org")) h["transferMode.dlna.org"] = "Streaming"
         writeHead(out, code, conn.responseMessage ?: "OK", h)
         if (method != "HEAD" && stream != null) {
             stream.use { input ->
