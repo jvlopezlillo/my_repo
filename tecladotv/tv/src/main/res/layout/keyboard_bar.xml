@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/bar_text"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#E6101820"
+    android:gravity="center"
+    android:paddingBottom="10dp"
+    android:paddingTop="10dp"
+    android:textColor="#FFFFFF"
+    android:textSize="16sp" />

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="56dp"
+        android:paddingRight="56dp"
+        android:paddingTop="32dp"
+        android:paddingBottom="32dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Teclado TV — receptor"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/ip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="#64B5F6"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textSize="18sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_enable"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="1. Activar teclado" />
+
+            <Button
+                android:id="@+id/btn_select"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="16dp"
+                android:text="2. Elegir como teclado" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/test_field"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:hint="Campo de prueba: selecciónalo y escribe desde el móvil"
+            android:inputType="text" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Cómo funciona:\n• Esta app es un teclado para la TV. Cuando está elegido como teclado, el móvil escribe directamente en el campo de texto seleccionado.\n• Paso 1: pulsa «Activar teclado» y activa «Teclado del móvil».\n• Paso 2: pulsa «Elegir como teclado» y selecciónalo.\n• En el móvil, abre «Teclado TV» y elige esta TV.\n• Para volver al teclado normal: botón «Usar teclado normal de la TV» en el móvil, o botón Menú (≡) del mando mientras se ve la barra del teclado."
+            android:textSize="16sp" />
+    </LinearLayout>
+</ScrollView>
