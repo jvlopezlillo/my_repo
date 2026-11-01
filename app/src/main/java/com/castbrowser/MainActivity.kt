@@ -645,7 +645,8 @@ class MainActivity : Activity() {
                 val order = when (mode) {
                     "direct" -> listOf(false)
                     "proxy" -> listOf(true)
-                    else -> if (vpn) listOf(true, false) else listOf(false, true)
+                    else -> if (vpn || prefs.getBoolean("viaPhone:${device.key}", false)) listOf(true, false)
+                    else listOf(false, true)
                 }
                 val fmp4 = cand.kind == "hls" && detectFmp4(cand.url, headers)
                 if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
@@ -661,6 +662,8 @@ class MainActivity : Activity() {
                     try {
                         cc.load(url, cand.contentType, title, start, live, fmp4)
                         ok = true
+                        // Recordamos qué camino funciona con esta TV para probarlo primero la próxima vez.
+                        if (mode == "auto" && !vpn) prefs.edit().putBoolean("viaPhone:${device.key}", useProxy).apply()
                         break
                     } catch (e: CastException) {
                         diag("Fallo (${if (useProxy) "vía móvil" else "directo"}): ${e.message}")

@@ -65,6 +65,9 @@ class CastClient(
     private val requestId = AtomicInteger(1)
     private val waiters = ConcurrentHashMap<Int, LinkedBlockingQueue<JSONObject>>()
     private val receiverStatus = LinkedBlockingQueue<JSONObject>()
+    private val mediaEvents = LinkedBlockingQueue<JSONObject>()
+    /** true cuando el vídeo ya se está reproduciendo (no durante los intentos de carga). */
+    @Volatile private var playing = false
     @Volatile private var closed = false
 
     @Volatile var transportId: String? = null; private set
@@ -107,6 +110,7 @@ class CastClient(
         live: Boolean,
         hlsFmp4: Boolean,
     ) {
+        playing = false
         launchReceiver()
         val media = JSONObject()
             .put("contentId", url)
@@ -124,19 +128,36 @@ class CastClient(
             .put("currentTime", if (live) 0.0 else startTime)
             .put("sessionId", sessionId)
         log("LOAD → $contentType $url")
-        val resp = try {
-            request(CastNs.MEDIA, transportId!!, req, 60)
-        } catch (_: CastException) {
-            throw CastException("El Chromecast no terminó de cargar el vídeo en 60 s (no llega al vídeo o es demasiado lento)")
-        }
-        when (resp.optString("type")) {
-            "MEDIA_STATUS" -> {
-                handleMediaStatus(resp)
-                if (lastStatus.playerState == "IDLE" && lastStatus.idleReason == "ERROR") {
-                    throw CastException("El Chromecast no pudo reproducir el vídeo (error al cargarlo)")
+        val id = requestId.getAndIncrement()
+        mediaEvents.clear()
+        send(CastNs.MEDIA, transportId!!, req.put("requestId", id))
+
+        // La primera respuesta suele ser un estado intermedio ("LOADING"): esperamos
+        // hasta que el vídeo arranque de verdad o el receptor diga que ha fallado.
+        val deadline = System.currentTimeMillis() + 60_000
+        var lastState = ""
+        while (true) {
+            val left = deadline - System.currentTimeMillis()
+            if (left <= 0) {
+                if (lastState == "BUFFERING") { playing = true; return } // red lenta, pero va cargando
+                throw CastException("El Chromecast no terminó de cargar el vídeo en 60 s")
+            }
+            val ev = mediaEvents.poll(left, TimeUnit.MILLISECONDS) ?: continue
+            when (ev.optString("type")) {
+                "LOAD_FAILED", "LOAD_CANCELLED", "INVALID_REQUEST", "ERROR" -> {
+                    val rid = ev.optInt("requestId", 0)
+                    if (rid == id || rid == 0) throw CastException(describeLoadError(ev))
+                }
+                "MEDIA_STATUS" -> {
+                    val st = ev.optJSONArray("status")?.optJSONObject(0) ?: continue
+                    lastState = st.optString("playerState")
+                    when {
+                        lastState == "PLAYING" || lastState == "PAUSED" -> { playing = true; return }
+                        lastState == "IDLE" && st.optString("idleReason") == "ERROR" ->
+                            throw CastException("El Chromecast no pudo reproducir el vídeo (error al cargarlo)")
+                    }
                 }
             }
-            else -> throw CastException(describeLoadError(resp))
         }
     }
 
@@ -159,6 +180,7 @@ class CastClient(
             if (reason.isNotEmpty()) append(", $reason")
             append(")")
             if (hint.isNotEmpty()) append(": ").append(hint)
+            else if (code == 0) append(": la TV no consigue abrir la dirección del vídeo")
         }
     }
 
@@ -273,6 +295,7 @@ class CastClient(
                     }
                     CastNs.MEDIA -> {
                         if (json.optString("type") == "MEDIA_STATUS") handleMediaStatus(json)
+                        mediaEvents.offer(json)
                     }
                 }
                 val rid = json.optInt("requestId", 0)
@@ -293,7 +316,7 @@ class CastClient(
         }
         val apps = status.optJSONArray("applications")
         val sid = sessionId
-        if (sid != null && mediaSessionId >= 0) {
+        if (sid != null && playing) {
             var stillRunning = false
             if (apps != null) for (i in 0 until apps.length()) {
                 if (apps.getJSONObject(i).optString("sessionId") == sid) stillRunning = true

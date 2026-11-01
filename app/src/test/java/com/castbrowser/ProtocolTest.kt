@@ -222,7 +222,16 @@ class ProtocolTest {
                                         .put("applications", org.json.JSONArray().put(JSONObject()
                                             .put("appId", "CC1AD845").put("transportId", "web-5").put("sessionId", "s1")))))
                             }
-                            "LOAD" -> {
+                            "LOAD" -> if (j.getJSONObject("media").getString("contentId").contains("fail")) {
+                                // Como el Mi Box: estado intermedio "LOADING" y luego fallo.
+                                send("web-5", CastNs.MEDIA, JSONObject().put("type", "MEDIA_STATUS")
+                                    .put("requestId", j.getInt("requestId"))
+                                    .put("status", org.json.JSONArray().put(JSONObject()
+                                        .put("mediaSessionId", 2).put("playerState", "IDLE")
+                                        .put("extendedStatus", JSONObject().put("playerState", "LOADING")))))
+                                send("web-5", CastNs.MEDIA, JSONObject().put("type", "LOAD_FAILED")
+                                    .put("requestId", j.getInt("requestId")).put("itemId", 1))
+                            } else {
                                 loaded[0] = j
                                 send("web-5", CastNs.MEDIA, JSONObject().put("type", "MEDIA_STATUS")
                                     .put("requestId", j.getInt("requestId"))
@@ -245,6 +254,10 @@ class ProtocolTest {
             onClosed = { closed.countDown() },
         )
         client.connect()
+        val failed = try {
+            client.load("https://x.com/fail.mp4", "video/mp4", "Peli", 0.0, live = false, hlsFmp4 = false); false
+        } catch (_: CastException) { true }
+        assertTrue("un LOAD_FAILED tras un estado intermedio debe contar como fallo", failed)
         client.load("http://10.0.0.2/o1/index.m3u8", "application/x-mpegURL", "Peli", 12.0, live = false, hlsFmp4 = true)
 
         assertEquals("web-5", client.transportId)
