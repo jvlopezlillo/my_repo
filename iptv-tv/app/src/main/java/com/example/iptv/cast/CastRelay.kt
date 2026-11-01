@@ -116,6 +116,9 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         if (session.method != Method.GET && session.method != Method.HEAD) {
             return cors(newFixedLengthResponse(Status.METHOD_NOT_ALLOWED, "text/plain", "Método no permitido"))
         }
+        if (session.uri == "/ping") {
+            return cors(newFixedLengthResponse(Status.OK, "text/plain", "IPTV TV: el servidor local del móvil está activo y es alcanzable.\n"))
+        }
         if (session.uri.startsWith("/t/")) return serveTs(session.uri)
         val target = decode(session.uri)
         if (target == null) {

@@ -341,6 +341,25 @@ object CastController {
         }.start()
     }
 
+    /** Dirección que se puede abrir desde otro dispositivo de la Wi-Fi para comprobar que llega al móvil. */
+    var testUrl by mutableStateOf<String?>(null)
+        private set
+
+    fun startNetworkTest() {
+        val ctx = appCtx ?: return
+        val ip = localLanIp(ctx)
+        if (ip == null) { testUrl = null; error = "No se encontró la red Wi-Fi del móvil"; return }
+        val r = ensureRelay(ctx, OkHttpClient()) ?: return
+        testUrl = "http://$ip:${r.listeningPort}/ping"
+        DebugLog.log("prueba de red: abre ${testUrl} desde otro dispositivo de la misma Wi-Fi")
+    }
+
+    fun stopNetworkTest() {
+        if (testUrl == null) return
+        testUrl = null
+        if (connectedName == null) stopRelay()
+    }
+
     private fun stopRelay() {
         relay?.stop()
         relay = null

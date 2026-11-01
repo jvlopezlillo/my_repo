@@ -78,6 +78,17 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                 var showLog by remember { mutableStateOf(false) }
                 if (showLog) CastLogDialog { showLog = false }
                 Button(onClick = { showLog = true }) { Text("Ver registro de diagnóstico") }
+                DisposableEffect(Unit) { onDispose { CastController.stopNetworkTest() } }
+                Button(onClick = {
+                    if (CastController.testUrl == null) CastController.startNetworkTest() else CastController.stopNetworkTest()
+                }) { Text(if (CastController.testUrl == null) "Probar la red local" else "Detener la prueba") }
+                CastController.testUrl?.let {
+                    Text(
+                        "Desde OTRO dispositivo conectado a la misma Wi-Fi (un portátil u otro móvil) abre esta dirección en el navegador:\n$it\n" +
+                            "Si ves un mensaje de «servidor local activo», esa Wi-Fi permite llegar al móvil.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Button(onClick = {
                     try {
                         ctx.startActivity(Intent("android.settings.CAST_SETTINGS"))
