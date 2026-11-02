@@ -24,6 +24,9 @@ interface PlayerControl {
     fun pause()
     fun seek(seconds: Double)
     fun stop()
+
+    /** false si la pantalla se está cerrando y ya no puede cargar vídeos. */
+    val active: Boolean
 }
 
 /**
@@ -50,7 +53,7 @@ object PlayerHub {
         duration = 0.0
         main.post {
             val p = player
-            if (p != null) {
+            if (p != null && p.active) {
                 p.load(req)
             } else {
                 pending = req
@@ -74,6 +77,28 @@ object PlayerHub {
     }
 
     private fun audio(ctx: Context) = ctx.getSystemService(AudioManager::class.java)
+
+    fun volumePercent(ctx: Context): Int {
+        val am = audio(ctx)
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        return Math.round(am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100f / max)
+    }
+
+    fun setVolumePercent(ctx: Context, percent: Int) {
+        main.post { setVolume(ctx, percent.coerceIn(0, 100) / 100.0) }
+    }
+
+    fun isMuted(ctx: Context): Boolean = audio(ctx).isStreamMute(AudioManager.STREAM_MUSIC)
+
+    fun setMuted(ctx: Context, mute: Boolean) {
+        main.post {
+            audio(ctx).adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                if (mute) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE,
+                0,
+            )
+        }
+    }
 
     private fun setVolume(ctx: Context, level: Double) {
         val am = audio(ctx)

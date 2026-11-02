@@ -74,9 +74,12 @@ class MainActivity : Activity() {
         val status = if (ReceiverService.running) "✅ Listo para recibir vídeos" else "⏳ Arrancando…"
         info.text = "$status\n\n" +
             "Nombre: ${ReceiverService.deviceName(this)}\n" +
-            "Dirección: $ip:${ReceiverService.port}\n\n" +
+            "Dirección: $ip:${ReceiverService.port}\n" +
+            (ReceiverService.dlnaName?.let { "DLNA: ✅ visible como \"$it\"\n" } ?: "DLNA: ⏳ arrancando…\n") +
+            "\n" +
             "En el móvil, abre CastBrowser, reproduce un vídeo y pulsa el botón de enviar.\n" +
             "Esta TV aparecerá como \"App CastBrowser TV\".\n" +
+            "Cualquier app DLNA (BubbleUPnP, Web Video Caster, VLC…) también puede enviarle vídeos.\n" +
             "Puedes salir de esta pantalla: el receptor sigue funcionando y arranca solo al encender la TV."
         val needsOverlay = Build.VERSION.SDK_INT >= 29 && !Settings.canDrawOverlays(this)
         overlayButton.visibility = if (needsOverlay) Button.VISIBLE else Button.GONE

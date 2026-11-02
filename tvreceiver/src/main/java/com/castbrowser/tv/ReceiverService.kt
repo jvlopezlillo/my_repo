@@ -21,6 +21,7 @@ import android.provider.Settings
  */
 class ReceiverService : Service() {
     private var server: ReceiverServer? = null
+    private var dlna: DlnaReceiver? = null
     private var nsd: NsdManager? = null
     private var registration: NsdManager.RegistrationListener? = null
 
@@ -35,6 +36,13 @@ class ReceiverService : Service() {
             server?.let { advertise(name, id, it.port) }
             running = server != null
             port = server?.port ?: 0
+        }
+        if (dlna == null) {
+            // Con otro nombre para distinguirlo de la app en la lista del móvil.
+            dlna = try {
+                DlnaReceiver(applicationContext, deviceName(this) + " (DLNA)", deviceId(this)).also { it.start() }
+            } catch (_: Exception) { null }
+            dlnaName = dlna?.name
         }
         return START_STICKY
     }
@@ -84,6 +92,9 @@ class ReceiverService : Service() {
         try { registration?.let { nsd?.unregisterService(it) } } catch (_: Exception) {}
         server?.close()
         server = null
+        try { dlna?.stop() } catch (_: Exception) {}
+        dlna = null
+        dlnaName = null
         running = false
         super.onDestroy()
     }
@@ -92,6 +103,7 @@ class ReceiverService : Service() {
         private const val CHANNEL = "receiver"
         @Volatile var running = false; private set
         @Volatile var port = 0; private set
+        @Volatile var dlnaName: String? = null; private set
 
         fun start(ctx: Context) {
             val i = Intent(ctx, ReceiverService::class.java)

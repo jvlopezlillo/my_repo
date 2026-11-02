@@ -153,7 +153,14 @@ class PlayerActivity : Activity(), PlayerControl {
     override fun play() { player?.play() }
     override fun pause() { player?.pause() }
     override fun seek(seconds: Double) { player?.seekTo((seconds * 1000).toLong().coerceAtLeast(0)) }
-    override fun stop() { finish() }
+    override val active: Boolean get() = !isFinishing && !isDestroyed
+
+    override fun stop() {
+        // Soltamos el puesto ya: si llega otro vídeo enseguida (DLNA manda Stop y luego Play),
+        // se abrirá una pantalla nueva en vez de cargarlo en esta, que se está cerrando.
+        if (PlayerHub.player === this) PlayerHub.player = null
+        finish()
+    }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Con el mando: el controlador aparece al pulsar cualquier tecla.
@@ -167,10 +174,12 @@ class PlayerActivity : Activity(), PlayerControl {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
-        if (PlayerHub.player === this) PlayerHub.player = null
+        val owner = PlayerHub.player === this
+        if (owner) PlayerHub.player = null
         player?.release()
         player = null
-        if (PlayerHub.state != "error") PlayerHub.state = "idle"
+        // Si ya hay otra pantalla de reproducción, no pisamos su estado.
+        if (owner && PlayerHub.state != "error") PlayerHub.state = "idle"
         super.onDestroy()
     }
 }

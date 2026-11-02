@@ -23,7 +23,7 @@ jobs:
       - name: Tests y compilación
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :app:testDebugUnitTest assembleRelease
+          ./gradlew --no-daemon :app:testDebugUnitTest :tvreceiver:testDebugUnitTest assembleRelease
 
       - name: Renombrar APK
         run: |

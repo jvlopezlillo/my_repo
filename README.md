@@ -18,6 +18,12 @@ Navegador mínimo cuyo único objetivo es enviar al Chromecast el vídeo que est
   encender la TV. En Android 10+ conviene darle el permiso "mostrar sobre otras apps" desde su
   pantalla, para que el vídeo se abra solo.
 
+### Receptor DLNA en la tele (CastBrowser TV)
+La app de la tele (Mi Box, Fire TV Stick…) también es un **receptor DLNA**: aparece en la red como
+"<nombre de la tele> (DLNA)" y acepta vídeos de cualquier app DLNA (BubbleUPnP, Web Video Caster,
+VLC, Windows "Transmitir a dispositivo"…), no sólo de este navegador. Soporta reproducir, pausa,
+buscar, volumen, silencio y avisos de estado (eventos UPnP). Ver `DlnaCore.kt`.
+
 ## Cómo se usa
 - Navega normalmente. En cuanto un vídeo empieza a reproducirse y hay algún Chromecast
   disponible, aparece el **botón de Chromecast** flotante (abajo a la derecha).
