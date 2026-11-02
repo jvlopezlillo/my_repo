@@ -41,7 +41,7 @@ object DebugLog {
     fun report(): String = buildString {
         appendLine("IPTV TV · registro de diagnóstico de Chromecast")
         appendLine("Móvil: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-        appendLine("Las direcciones van sin rutas ni credenciales; sí aparece el dominio del servidor.")
+        appendLine("Las direcciones van sin rutas ni credenciales; sí aparece el dominio del servidor y, al elegir un Chromecast, el nombre de su Wi-Fi.")
         appendLine("-----")
         lines.forEach { appendLine(it) }
     }

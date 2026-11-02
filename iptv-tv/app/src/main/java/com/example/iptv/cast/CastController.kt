@@ -25,6 +25,8 @@ import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import android.net.wifi.WifiManager
+import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -213,7 +215,7 @@ object CastController {
         val att = Attempt(token, channel, p, client)
         attempt = att
         val convertTs = p.kind == Kind.TS
-        val wantsRelay = forceRelay || viaProxy || vpnActive(ctx)
+        val wantsRelay = forceRelay || viaProxy // la VPN por sí sola no basta: con VPN la sesión Cast funciona y el directo es más rápido
         val first = when {
             forceRelay -> Mode.RELAY                       // forzado: también sirve para volver a comprobar la red
             relayUnreachable() -> Mode.DIRECT              // ya sabemos que este Chromecast no llega al móvil
@@ -257,13 +259,17 @@ object CastController {
         } else {
             att.triedDirect = true
             url = p.url
-            status = "Enviando directamente al Chromecast…"
+            // Si antes se probó el camino por el móvil, el receptor sigue ocupado con aquel intento unos ~47 s
+            val slowStart = att.triedRelay
+            status = if (slowStart) "El Chromecast está terminando el intento anterior; puede tardar hasta ~50 s…"
+            else "Enviando directamente al Chromecast…"
+            val wait = if (slowStart) 75_000L else 20_000L
             main.postDelayed({
                 if (attempt !== att || att.mode != Mode.DIRECT || att.progressed || att.finished) return@postDelayed
-                DebugLog.log("sin progreso en 15 s con el envío directo")
+                DebugLog.log("sin progreso en ${wait / 1000} s con el envío directo")
                 if (!att.triedRelay && !relayUnreachable()) send(att, Mode.RELAY)
                 else fail(att, noPlayMessage(att))
-            }, 15_000)
+            }, wait)
         }
 
         val contentType = if (p.kind == Kind.HLS || convertTs) "application/x-mpegURL" else (p.contentType?.substringBefore(';') ?: "video/mp4")
@@ -346,8 +352,38 @@ object CastController {
 
     /** Anota en el registro la red del móvil (para comparar con la del Chromecast). */
     fun logNetwork(ctx: Context) {
-        DebugLog.log("red del móvil: ip=${localLanIp(ctx)} VPN=${vpnActive(ctx)}")
+        @Suppress("DEPRECATION")
+        val wi = (ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager).connectionInfo
+        DebugLog.log("red del móvil: ip=${localLanIp(ctx)} VPN=${vpnActive(ctx)} wifi=${wi?.frequency} MHz ${wi?.linkSpeed} Mbps")
     }
+
+    /** Consulta la información de red que publica el propio Chromecast (si la ofrece) para compararla con la del móvil. */
+    fun inspectChromecast(ip: String) {
+        Thread {
+            try {
+                val c = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(4, TimeUnit.SECONDS).build()
+                c.newCall(Request.Builder().url("http://$ip:8008/setup/eureka_info?options=detail").build()).execute().use { r ->
+                    if (!r.isSuccessful) {
+                        DebugLog.log("Chromecast $ip: información de red no disponible (HTTP ${r.code})")
+                        return@use
+                    }
+                    val found = LinkedHashMap<String, String>()
+                    fun walk(o: JSONObject) {
+                        for (k in o.keys()) {
+                            val v = o.opt(k)
+                            if (v is JSONObject) walk(v) else if (k in WANTED_KEYS && k !in found) found[k] = v.toString()
+                        }
+                    }
+                    walk(JSONObject(r.body!!.string()))
+                    DebugLog.log("Chromecast $ip: " + found.entries.joinToString(" ") { "${it.key}=${it.value}" })
+                }
+            } catch (e: Exception) {
+                DebugLog.log("Chromecast $ip: no se pudo leer su información de red (${e.javaClass.simpleName})")
+            }
+        }.start()
+    }
+
+    private val WANTED_KEYS = setOf("ssid", "ip_address", "ethernet_connected", "signal_level", "wpa_state", "build_version")
 
     /** Dirección que se puede abrir desde otro dispositivo de la Wi-Fi para comprobar que llega al móvil. */
     var testUrl by mutableStateOf<String?>(null)
