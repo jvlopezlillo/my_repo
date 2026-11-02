@@ -76,12 +76,15 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                         val dev = CastDevice.getFromBundle(route.extras)
                         DebugLog.log("Chromecast elegido: «${route.name}» ip=${dev?.inetAddress?.hostAddress} modelo=${dev?.modelName}")
                         CastController.logNetwork(ctx)
-                        dev?.inetAddress?.hostAddress?.let { CastController.inspectChromecast(it) }
+                        dev?.inetAddress?.hostAddress?.let { CastController.inspectChromecast(route.name, it) }
                         router.selectRoute(route)
                         onDismiss()
                     }, modifier = Modifier.fillMaxWidth()) {
                         Text(route.name)
                     }
+                }
+                CastController.notice?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 var showLog by remember { mutableStateOf(false) }
                 if (showLog) CastLogDialog { showLog = false }

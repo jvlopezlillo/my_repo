@@ -138,18 +138,20 @@ object CastController {
     // ───────────── sondeo del formato ─────────────
     private fun resolve(url: String, client: OkHttpClient): Probe {
         var first: Probe? = null
+        var original: Probe? = null
         for (candidate in candidates(url)) {
             var p = probe(candidate, client)
             if (p.http == 403 || p.http == 429) {
-                DebugLog.log("sonda: HTTP ${p.http}, se reintenta en 2 s (¿límite de conexiones del proveedor?)")
-                Thread.sleep(2000)
+                DebugLog.log("sonda: HTTP ${p.http}, se reintenta en 3 s (¿límite de conexiones del proveedor?)")
+                Thread.sleep(3000)
                 p = probe(candidate, client)
             }
+            if (candidate == url) original = p
             DebugLog.log("sonda ${DebugLog.redact(candidate)} → ${p.kind} http=${p.http} tipo=${p.contentType}")
             if (p.kind == Kind.HLS) return p
             if (first == null) first = p
         }
-        return first!!
+        return original ?: first!!
     }
 
     /** La dirección original y variantes que suelen ser HLS: Xtream (`/live/u/p/id.m3u8`) y `.ts`/sin extensión → `.m3u8`. */
@@ -162,7 +164,10 @@ object CastController {
             !last.contains('.') && last.isNotEmpty() -> "$base.m3u8$query"
             else -> null
         }
-        return listOfNotNull(url, xtreamHls(url), swapped).distinct()
+        // Si parece TS o no tiene extensión, lo más probable es que exista versión HLS: se prueba antes que el original,
+        // para no abrir primero el flujo TS (los proveedores suelen limitar las conexiones simultáneas).
+        val alternatives = listOfNotNull(xtreamHls(url), swapped)
+        return (alternatives + url).distinct()
     }
 
     /** Muchas listas traen URLs Xtream en TS (`…/user/pass/123` o `.ts`); el mismo canal suele estar en HLS. */
@@ -272,7 +277,11 @@ object CastController {
             }, wait)
         }
 
-        val contentType = if (p.kind == Kind.HLS || convertTs) "application/x-mpegURL" else (p.contentType?.substringBefore(';') ?: "video/mp4")
+        val contentType = when {
+            p.kind == Kind.HLS || (convertTs && mode == Mode.RELAY) -> "application/x-mpegURL" // TS convertido en el móvil = HLS
+            convertTs -> "video/mp2t"                                                          // TS crudo enviado en directo
+            else -> p.contentType?.substringBefore(';') ?: "video/mp4"
+        }
         DebugLog.log("load [$mode]: tipo=$contentType → ${DebugLog.redact(url)}")
         val meta = MediaMetadata(MediaMetadata.MEDIA_TYPE_GENERIC).apply {
             putString(MediaMetadata.KEY_TITLE, att.channel.name)
@@ -315,8 +324,9 @@ object CastController {
 
     private fun noPlayMessage(att: Attempt): String =
         if (att.probe.kind == Kind.TS) {
-            "Este canal es MPEG-TS directo: el Chromecast no lo reproduce tal cual y no puede conectar con el móvil para convertirlo. " +
-                "Prueba «Duplicar pantalla» (Transmitir pantalla de Android) o un canal con versión HLS."
+            "Este canal es MPEG-TS directo: el Chromecast no lo reproduce tal cual y no puede conectar con el móvil para convertirlo" +
+                (if (notice != null) " (parece tener una VPN activa: permite la red local en ella o desconéctala)" else "") +
+                ". Prueba «Duplicar pantalla» (Transmitir pantalla de Android) o un canal con versión HLS."
         } else "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo."
 
     private fun ensureRelay(ctx: Context, client: OkHttpClient): CastRelay? {
@@ -358,7 +368,8 @@ object CastController {
     }
 
     /** Consulta la información de red que publica el propio Chromecast (si la ofrece) para compararla con la del móvil. */
-    fun inspectChromecast(ip: String) {
+    fun inspectChromecast(name: String, ip: String) {
+        notice = null
         Thread {
             try {
                 val c = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(4, TimeUnit.SECONDS).build()
@@ -376,12 +387,27 @@ object CastController {
                     }
                     walk(JSONObject(r.body!!.string()))
                     DebugLog.log("Chromecast $ip: " + found.entries.joinToString(" ") { "${it.key}=${it.value}" })
+                    // Si se identifica con una IP de otra red, casi seguro hay una VPN activa en el Chromecast.
+                    val reported = found["ip_address"]
+                    if (reported != null && reported != ip && reported.substringBeforeLast('.') != ip.substringBeforeLast('.')) {
+                        val msg = "El Chromecast se identifica con la IP $reported, distinta de la de su Wi-Fi ($ip): probablemente tiene una " +
+                            "VPN activa. Mientras esa VPN no permita la red local (LAN), no puede conectar con el móvil."
+                        DebugLog.log(msg)
+                        main.post {
+                            notice = msg
+                            markRelayFor(name, false)
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 DebugLog.log("Chromecast $ip: no se pudo leer su información de red (${e.javaClass.simpleName})")
             }
         }.start()
     }
+
+    /** Aviso sobre el Chromecast elegido (p. ej. VPN activa en él). */
+    var notice by mutableStateOf<String?>(null)
+        private set
 
     private val WANTED_KEYS = setOf("ssid", "ip_address", "ethernet_connected", "signal_level", "wpa_state", "build_version")
 
@@ -417,7 +443,10 @@ object CastController {
     }
 
     private fun markRelay(reachable: Boolean) {
-        val name = connectedName ?: return
+        markRelayFor(connectedName ?: return, reachable)
+    }
+
+    private fun markRelayFor(name: String, reachable: Boolean) {
         val p = prefs() ?: return
         val set = (p.getStringSet("cast_relay_unreachable", emptySet()) ?: emptySet()).toMutableSet()
         val changed = if (reachable) set.remove(name) else set.add(name)
@@ -518,6 +547,7 @@ object CastController {
         override fun onSessionEnding(s: CastSession) {}
         override fun onSessionEnded(s: CastSession, code: Int) {
             DebugLog.log("Sesión Cast: terminada, código ${codeText(code)}")
+            notice = null
             connectedName = null
             attempt = null
             stopRelay()

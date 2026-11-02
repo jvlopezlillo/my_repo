@@ -148,6 +148,7 @@ fun PlayerScreen(vm: MainViewModel) {
                 }
                 if (casting) Text("Reproduciendo en $castName", color = MaterialTheme.colorScheme.primary)
                 CastController.status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (casting) CastController.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 (error ?: CastController.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!tv) {
                     Row(
