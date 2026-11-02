@@ -24,6 +24,12 @@ La app de la tele (Mi Box, Fire TV Stick…) también es un **receptor DLNA**: a
 VLC, Windows "Transmitir a dispositivo"…), no sólo de este navegador. Soporta reproducir, pausa,
 buscar, volumen, silencio y avisos de estado (eventos UPnP). Ver `DlnaCore.kt`.
 
+## Protección anti-publicidad
+Activada por defecto (menú ⋮ para quitarla si una web falla). Bloquea: ventanas emergentes,
+enlaces que abren otras apps (Booking, AliExpress, Chrome, Play Store…), saltos automáticos a otra
+web sin que toques nada, y una lista de redes publicitarias conocidas. No es un bloqueador perfecto:
+las redes de anuncios cambian de dominio. Los bloqueos quedan anotados en Diagnóstico.
+
 ## Cómo se usa
 - Navega normalmente. En cuanto un vídeo empieza a reproducirse y hay algún Chromecast
   disponible, aparece el **botón de Chromecast** flotante (abajo a la derecha).

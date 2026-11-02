@@ -83,6 +83,12 @@ class MainActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences("settings", Context.MODE_PRIVATE) }
 
+    // Protección anti-publicidad: bloquea ventanas emergentes, apertura de otras apps,
+    // saltos automáticos a otras webs y redes publicitarias conocidas.
+    private var shield = true
+    private var blockedTotal = 0
+    private var lastBlockToast = 0L
+
     private val periodic = object : Runnable {
         override fun run() {
             if (client == null) discovery.discoverNow()
@@ -99,8 +105,10 @@ class MainActivity : Activity() {
         discovery.onDevicesChanged = { updateCastButton() }
         net.onChanged = { main.postDelayed({ discovery.discoverNow() }, 1500) }
 
+        shield = prefs.getBoolean("shield", true)
         buildUi()
         setupWebView()
+        webView.settings.setSupportMultipleWindows(shield)
 
         net.start()
         discovery.start()
@@ -323,7 +331,9 @@ class MainActivity : Activity() {
             builtInZoomControls = true
             displayZoomControls = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            setSupportMultipleWindows(false)
+            // Con la protección activa pedimos las ventanas nuevas para poder descartarlas
+            // (si no, window.open se cargaría en esta misma pantalla).
+            setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = false
         }
         userAgent = webView.settings.userAgentString
@@ -340,7 +350,21 @@ class MainActivity : Activity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
                 val scheme = uri.scheme?.lowercase()
-                if (scheme == "http" || scheme == "https" || scheme == "about" || scheme == "data" || scheme == "blob") return false
+                val web = scheme == "http" || scheme == "https"
+                if (scheme == "about" || scheme == "data" || scheme == "blob") return false
+                if (shield) {
+                    // Enlaces a otras apps (intent://, market://, booking://…): nunca.
+                    if (!web) { noteBlocked("abrir otra app", uri.toString()); return true }
+                    if (request.isForMainFrame) {
+                        if (AdBlock.isAdHost(uri.host)) { noteBlocked("publicidad", uri.toString()); return true }
+                        // Salto a otra web sin que hayas tocado nada (script de anuncios).
+                        if (!request.hasGesture() && !request.isRedirect &&
+                            AdBlock.isCrossSite(Uri.parse(view.url ?: "").host, uri.host)
+                        ) { noteBlocked("salto automático a otra web", uri.toString()); return true }
+                    }
+                    return false
+                }
+                if (web) return false
                 try {
                     val intent = if (scheme == "intent") Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
                     else Intent(Intent.ACTION_VIEW, uri)
@@ -371,6 +395,10 @@ class MainActivity : Activity() {
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 val url = request.url.toString()
+                if (shield && AdBlock.isAdHost(request.url.host)) {
+                    noteBlocked("publicidad", url)
+                    return WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)))
+                }
                 if (MediaDetector.classify(url) != null) {
                     val h = HashMap<String, String>()
                     request.requestHeaders.forEach { (k, v) ->
@@ -384,6 +412,25 @@ class MainActivity : Activity() {
         }
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
+                if (!shield) return false
+                // Ventana emergente: la recibimos en un WebView desechable (sin JavaScript)
+                // sólo para anotar la dirección, y la destruimos.
+                val tmp = WebView(this@MainActivity)
+                tmp.settings.javaScriptEnabled = false
+                tmp.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
+                        noteBlocked("ventana emergente", r.url.toString())
+                        main.post { try { tmp.destroy() } catch (_: Exception) {} }
+                        return true
+                    }
+                }
+                (resultMsg.obj as WebView.WebViewTransport).webView = tmp
+                resultMsg.sendToTarget()
+                main.postDelayed({ try { tmp.destroy() } catch (_: Exception) {} }, 5000)
+                return true
+            }
+
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
                 progress.visibility = if (newProgress >= 100) View.INVISIBLE else View.VISIBLE
@@ -402,6 +449,19 @@ class MainActivity : Activity() {
             }
 
             override fun onHideCustomView() = hideCustomView()
+        }
+    }
+
+    /** Anota un bloqueo y avisa con un mensaje breve (como mucho uno cada pocos segundos). */
+    private fun noteBlocked(kind: String, url: String) {
+        blockedTotal++
+        diag("🛡️ Bloqueado ($kind): ${url.take(160)}")
+        main.post {
+            val now = System.currentTimeMillis()
+            if (now - lastBlockToast > 2500) {
+                lastBlockToast = now
+                toast("🛡️ Bloqueado: $kind")
+            }
         }
     }
 
@@ -440,6 +500,8 @@ class MainActivity : Activity() {
         m.menu.add(0, 5, 0, "Usar esta página como inicio")
         m.menu.add(0, 6, 0, "Ir a inicio")
         m.menu.add(0, 7, 0, "Probar con vídeo de ejemplo")
+        m.menu.add(0, 9, 0, "Protección anti-publicidad: " +
+            (if (shield) "ACTIVADA ($blockedTotal bloqueos)" else "desactivada"))
         m.menu.add(0, 8, 0, "Diagnóstico (registro)")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -451,6 +513,12 @@ class MainActivity : Activity() {
                 6 -> webView.loadUrl(prefs.getString("home", HOME)!!)
                 7 -> showDevicePicker(SAMPLES, 0, sample = true)
                 8 -> showDiagnostics()
+                9 -> {
+                    shield = !shield
+                    prefs.edit().putBoolean("shield", shield).apply()
+                    webView.settings.setSupportMultipleWindows(shield)
+                    toast(if (shield) "Protección anti-publicidad activada" else "Protección desactivada")
+                }
             }
             true
         }
