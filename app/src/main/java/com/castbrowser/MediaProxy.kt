@@ -120,6 +120,74 @@ class MediaProxy(
     /** Peticiones correctas ya registradas (sólo apuntamos las primeras). */
     @Volatile var okLogged = 0
 
+    private class TsStream(val url: String, val headers: Map<String, String>, val mime: String)
+
+    private val tsStreams = ConcurrentHashMap<String, TsStream>()
+    private val tsCounter = AtomicInteger(0)
+
+    private fun fetchBytes(url: String, headers: Map<String, String>): ByteArray {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.instanceFollowRedirects = true
+        c.connectTimeout = 15_000
+        c.readTimeout = 30_000
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        cookieProvider(url)?.takeIf { it.isNotBlank() }?.let { c.setRequestProperty("Cookie", it) }
+        try {
+            val code = c.responseCode
+            if (code >= 400) { lastUpstreamError = code; throw java.io.IOException("HTTP $code") }
+            return c.inputStream.use { it.readBytes() }
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** Comprueba que la lista HLS se puede convertir a MPEG-TS; lanza [HlsUnsupported] o IOException si no. */
+    fun canRelay(playlistUrl: String, headers: Map<String, String>) {
+        HlsToTs({ fetchBytes(it, headers) }, log = log).open(playlistUrl)
+    }
+
+    /** Dirección .ts continua (en el móvil) que sirve el HLS convertido a MPEG-TS. */
+    fun relayUrl(playlistUrl: String, headers: Map<String, String>, mime: String): String {
+        val id = "t" + tsCounter.incrementAndGet()
+        tsStreams[id] = TsStream(playlistUrl, headers, mime)
+        return "$baseUrl/ts/$id.ts"
+    }
+
+    private fun serveTs(method: String, path: String, socket: Socket, out: OutputStream) {
+        val id = path.removePrefix("/ts/").substringBefore('?').substringBefore('.')
+        val st = tsStreams[id]
+        if (st == null) {
+            writeHead(out, 404, "Not Found", mapOf("Content-Length" to "0"))
+            return
+        }
+        log("Proxy: ← $method flujo MPEG-TS (HLS convertido)")
+        val conv = HlsToTs({ fetchBytes(it, st.headers) }, log = log)
+        val session = try {
+            conv.open(st.url)
+        } catch (e: Exception) {
+            log("Proxy: no se pudo preparar el flujo TS: ${e.message}")
+            writeHead(out, 502, "Bad Gateway", mapOf("Content-Length" to "0"))
+            return
+        }
+        // Sin Content-Length: el cuerpo dura hasta que se cierra la conexión (como un directo).
+        writeHead(out, 200, "OK", linkedMapOf(
+            "Content-Type" to st.mime,
+            "Accept-Ranges" to "none",
+            "Cache-Control" to "no-cache",
+            "transferMode.dlna.org" to "Streaming",
+            "contentFeatures.dlna.org" to "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+        ))
+        out.flush()
+        if (method == "HEAD") return
+        socket.soTimeout = 0
+        try {
+            conv.stream(session, out) { socket.isClosed }
+            log("Proxy: flujo TS terminado")
+        } catch (e: java.io.IOException) {
+            log("Proxy: flujo TS cortado (${e.message})")
+        }
+    }
+
     /** Registro de peticiones (para el diagnóstico). */
     @Volatile var log: (String) -> Unit = {}
 
@@ -170,6 +238,10 @@ class MediaProxy(
                     return
                 }
                 val path = parts[1]
+                if (path.startsWith("/ts/")) {
+                    serveTs(method, path, s, out)
+                    return
+                }
                 val slash = path.indexOf('/', 1)
                 val id = if (slash > 0) path.substring(1, slash) else path.substring(1)
                 val origin = rewriter.originFor(id)

@@ -514,6 +514,8 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
                             avControlUrl = j.getString("av"), avServiceType = j.getString("avType"),
                             rcControlUrl = j.optString("rc").ifEmpty { null },
                             rcServiceType = j.optString("rcType").ifEmpty { null },
+                            cmControlUrl = j.optString("cm").ifEmpty { null },
+                            cmServiceType = j.optString("cmType").ifEmpty { null },
                         )
                     },
                 )
@@ -531,7 +533,8 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
             d.dlna?.let { i ->
                 o.put("dlna", JSONObject().put("name", i.name).put("udn", i.udn).put("model", i.model ?: "")
                     .put("av", i.avControlUrl).put("avType", i.avServiceType)
-                    .put("rc", i.rcControlUrl ?: "").put("rcType", i.rcServiceType ?: ""))
+                    .put("rc", i.rcControlUrl ?: "").put("rcType", i.rcServiceType ?: "")
+                    .put("cm", i.cmControlUrl ?: "").put("cmType", i.cmServiceType ?: ""))
             }
             arr.put(o)
         }

@@ -11,6 +11,8 @@ data class DlnaInfo(
     val avServiceType: String,
     val rcControlUrl: String?,
     val rcServiceType: String?,
+    val cmControlUrl: String? = null,
+    val cmServiceType: String? = null,
 )
 
 object Dlna {
@@ -53,6 +55,7 @@ object Dlna {
         }
         val av = find("AVTransport") ?: return null
         val rc = find("RenderingControl")
+        val cm = find("ConnectionManager")
         return DlnaInfo(
             name = tag(xml, "friendlyName") ?: "DLNA",
             udn = tag(xml, "UDN") ?: location,
@@ -61,6 +64,8 @@ object Dlna {
             avServiceType = av.second,
             rcControlUrl = rc?.first,
             rcServiceType = rc?.second,
+            cmControlUrl = cm?.first,
+            cmServiceType = cm?.second,
         )
     }
 
@@ -77,14 +82,14 @@ object Dlna {
         return "%d:%02d:%02d".format(t / 3600, (t % 3600) / 60, t % 60)
     }
 
-    fun didl(url: String, title: String, mime: String): String =
+    fun didl(url: String, title: String, mime: String, features: String = "*"): String =
         "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
             "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
             "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
             "<item id=\"0\" parentID=\"-1\" restricted=\"1\">" +
             "<dc:title>${escape(title)}</dc:title>" +
             "<upnp:class>object.item.videoItem</upnp:class>" +
-            "<res protocolInfo=\"http-get:*:$mime:*\">${escape(url)}</res>" +
+            "<res protocolInfo=\"http-get:*:$mime:$features\">${escape(url)}</res>" +
             "</item></DIDL-Lite>"
 }
 
@@ -114,8 +119,20 @@ class DlnaRenderer(
                 Dlna.tag(xml, "CurrentVolume")?.toDoubleOrNull()?.let { lastStatus = lastStatus.copy(volume = it / 100.0) }
             } catch (_: Exception) {}
         }
+        info.cmControlUrl?.let { url ->
+            try {
+                val sink = Dlna.tag(soap(url, info.cmServiceType!!, "GetProtocolInfo", emptyList()), "Sink").orEmpty()
+                sinkMimes = sink.split(',')
+                    .mapNotNull { it.split(':').getOrNull(2)?.trim()?.lowercase()?.takeIf { m -> m.isNotEmpty() && m != "*" } }
+                    .toSet()
+                log("DLNA: formatos que acepta la tele: " + sinkMimes.sorted().joinToString(", ").take(600))
+            } catch (_: Exception) {}
+        }
         log("DLNA: ${info.name} responde")
     }
+
+    /** Tipos MIME que la tele dice aceptar (ConnectionManager); vacío si no se pudo leer. */
+    @Volatile var sinkMimes: Set<String> = emptySet(); private set
 
     override fun load(
         url: String,
@@ -131,12 +148,15 @@ class DlnaRenderer(
             contentType.contains("mpegurl", true) -> "application/vnd.apple.mpegurl"
             else -> contentType
         }
+        // Un .ts continuo en directo: sin saltos (OP=00) y en modo streaming.
+        val features = if (url.substringBefore('?').endsWith(".ts") && mime.startsWith("video/"))
+            "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000" else "*"
         try { soap(info.avControlUrl, info.avServiceType, "Stop", listOf("InstanceID" to "0")) } catch (_: Exception) {}
         log("DLNA: SetAVTransportURI $url")
         soap(info.avControlUrl, info.avServiceType, "SetAVTransportURI", listOf(
             "InstanceID" to "0",
             "CurrentURI" to url,
-            "CurrentURIMetaData" to Dlna.didl(url, title, mime),
+            "CurrentURIMetaData" to Dlna.didl(url, title, mime, features),
         ))
         soap(info.avControlUrl, info.avServiceType, "Play", listOf("InstanceID" to "0", "Speed" to "1"))
 

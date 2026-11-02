@@ -667,27 +667,68 @@ class MainActivity : Activity() {
                 proxy?.lastUpstreamError = null
                 proxy?.rewriter?.sawDrm = false
                 proxy?.okLogged = 0
+                // Intentos: en una tele DLNA con HLS, primero convertir a MPEG-TS en el móvil
+                // (muchas teles no entienden HLS por DLNA); luego los caminos normales.
+                class Attempt(val useProxy: Boolean, val tsMime: String? = null)
+                val attempts = ArrayList<Attempt>()
+                if (device.type == CastDevice.TYPE_DLNA && cand.kind == "hls") {
+                    val p = ensureProxy(device)
+                    if (p != null) {
+                        try {
+                            p.canRelay(cand.url, headers)
+                            val sink = (cc as? DlnaRenderer)?.sinkMimes.orEmpty()
+                            listOf("video/mp2t", "video/mpeg", "video/vnd.dlna.mpeg-tts")
+                                .filter { it in sink }
+                                .ifEmpty { listOf("video/mpeg", "video/mp2t") }
+                                .take(2)
+                                .forEach { attempts.add(Attempt(true, it)) }
+                        } catch (e: Exception) {
+                            diag("No se puede convertir a MPEG-TS: ${e.message}")
+                        }
+                    }
+                }
+                order.forEach { attempts.add(Attempt(it)) }
+
                 var error: Exception? = null
                 var ok = false
-                for (useProxy in order) {
-                    val url = if (useProxy) {
+                for (att in attempts) {
+                    val useProxy = att.useProxy
+                    val url: String
+                    val ctype: String
+                    if (att.tsMime != null) {
+                        val p = ensureProxy(device) ?: continue
+                        url = p.relayUrl(cand.url, headers, att.tsMime)
+                        ctype = att.tsMime
+                    } else if (useProxy) {
                         val p = ensureProxy(device) ?: continue
                         p.rewriter.defaultHeaders = headers
-                        p.rewriter.proxify(cand.url, headers)
-                    } else cand.url
-                    main.post { panelStatus.text = if (useProxy) "Cargando (a través del móvil)…" else "Cargando…" }
+                        url = p.rewriter.proxify(cand.url, headers)
+                        ctype = cand.contentType
+                    } else {
+                        url = cand.url
+                        ctype = cand.contentType
+                    }
+                    val label = when {
+                        att.tsMime != null -> "convertido a TS ${att.tsMime}"
+                        useProxy -> "vía móvil"
+                        else -> "directo"
+                    }
+                    main.post { panelStatus.text = "Cargando ($label)…" }
                     try {
                         // Nuestra app de TV puede usar las cookies y cabeceras del navegador al ir directa.
                         val sendHeaders = if (useProxy) emptyMap() else headers + (
                             CookieManager.getInstance().getCookie(cand.url)?.let { mapOf("Cookie" to it) } ?: emptyMap())
-                        cc.load(url, cand.contentType, title, start, live, fmp4, sendHeaders)
+                        cc.load(url, ctype, title, start, live, fmp4, sendHeaders)
                         ok = true
                         // Recordamos qué camino funciona con esta TV para probarlo primero la próxima vez.
-                        if (mode == "auto" && !vpn) prefs.edit().putBoolean("viaPhone:${device.key}", useProxy).apply()
+                        if (mode == "auto" && !vpn && att.tsMime == null) {
+                            prefs.edit().putBoolean("viaPhone:${device.key}", useProxy).apply()
+                        }
                         break
                     } catch (e: CastException) {
-                        diag("Fallo (${if (useProxy) "vía móvil" else "directo"}): ${e.message}")
-                        error = e
+                        diag("Fallo ($label): ${e.message}")
+                        // Se muestra el error del primer intento (el más relevante), no el del último.
+                        if (error == null) error = e
                     }
                 }
                 if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo (el móvil no está en ninguna red local: ni Wi-Fi ni punto de acceso)")
