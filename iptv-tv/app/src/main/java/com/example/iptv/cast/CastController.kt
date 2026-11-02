@@ -389,13 +389,23 @@ object CastController {
                     DebugLog.log("Chromecast $ip: " + found.entries.joinToString(" ") { "${it.key}=${it.value}" })
                     // Si se identifica con una IP de otra red, casi seguro hay una VPN activa en el Chromecast.
                     val reported = found["ip_address"]
-                    if (reported != null && reported != ip && reported.substringBeforeLast('.') != ip.substringBeforeLast('.')) {
-                        val msg = "El Chromecast se identifica con la IP $reported, distinta de la de su Wi-Fi ($ip): probablemente tiene una " +
-                            "VPN activa. Mientras esa VPN no permita la red local (LAN), no puede conectar con el móvil."
-                        DebugLog.log(msg)
-                        main.post {
+                    val vpn = reported != null && reported != ip && reported.substringBeforeLast('.') != ip.substringBeforeLast('.')
+                    val msg = "El Chromecast se identifica con la IP $reported, distinta de la de su Wi-Fi ($ip): probablemente tiene una " +
+                        "VPN activa. Mientras esa VPN no permita la red local (LAN), no puede conectar con el móvil."
+                    if (vpn) DebugLog.log(msg)
+                    main.post {
+                        val p = prefs() ?: return@post
+                        val marked = (p.getStringSet("cast_vpn_marked", emptySet()) ?: emptySet()).toMutableSet()
+                        if (vpn) {
                             notice = msg
+                            marked.add(name)
+                            p.edit().putStringSet("cast_vpn_marked", marked).apply()
                             markRelayFor(name, false)
+                        } else if (reported != null && marked.remove(name)) {
+                            // Antes tenía VPN y ya no: se vuelve a permitir el camino por el móvil
+                            p.edit().putStringSet("cast_vpn_marked", marked).apply()
+                            markRelayFor(name, true)
+                            DebugLog.log("«$name» ya no usa VPN: se vuelve a permitir el camino por el móvil")
                         }
                     }
                 }

@@ -164,9 +164,12 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         val type = body.contentType()?.toString() ?: guessType(target)
         val stream = object : FilterInputStream(body.byteStream()) {
             var sent = 0L
+            var done = false
             override fun read(): Int = super.read().also { if (it >= 0) sent++ }
             override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { if (it > 0) sent += it }
             override fun close() {
+                if (done) return // NanoHTTPD puede cerrar dos veces
+                done = true
                 try { super.close() } finally {
                     resp.close()
                     DebugLog.log("relay ✓ enviados ${sent / 1024} KB (${DebugLog.redact(target)})")
