@@ -128,6 +128,7 @@ class ProtocolTest {
     @Test
     fun proxyServesRewrittenPlaylistAndRanges() {
         val seenReferer = arrayOfNulls<String>(1)
+        val seenMethods = java.util.concurrent.CopyOnWriteArrayList<String>()
         // Servidor HTTP mínimo (el de la JDK no está disponible en los tests de Android).
         val server = java.net.ServerSocket(0, 10, InetAddress.getLoopbackAddress())
         Thread {
@@ -135,7 +136,9 @@ class ProtocolTest {
                 val s = try { server.accept() } catch (_: Exception) { break }
                 s.use { sock ->
                     val r = sock.getInputStream().bufferedReader(Charsets.ISO_8859_1)
-                    val path = r.readLine().split(' ')[1]
+                    val requestLine = r.readLine().split(' ')
+                    val path = requestLine[1]
+                    if (path == "/v/seg.ts") seenMethods.add(requestLine[0])
                     val h = HashMap<String, String>()
                     while (true) {
                         val l = r.readLine() ?: break
@@ -176,6 +179,14 @@ class ProtocolTest {
             val bytes = s.inputStream.use { it.readBytes() }
             assertEquals(10, bytes.size)
             assertEquals(10.toByte(), bytes[0])
+
+            // HEAD de la tele: a la web se le pide con GET y a la tele se le contesta sin cuerpo.
+            seenMethods.clear()
+            val head = URL(segUrl).openConnection() as HttpURLConnection
+            head.requestMethod = "HEAD"
+            assertEquals(200, head.responseCode)
+            assertEquals(0, head.inputStream.use { it.readBytes() }.size)
+            assertEquals(listOf("GET"), seenMethods.toList())
         } finally {
             proxy.close()
             server.close()

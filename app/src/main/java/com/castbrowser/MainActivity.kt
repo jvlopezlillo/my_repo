@@ -709,7 +709,7 @@ class MainActivity : Activity() {
                         "La web del vídeo se niega a dárselo a la tele (error $code). Suele pasar cuando el enlace ha caducado o la web protege el vídeo. Recarga la página, dale al play y vuelve a intentarlo."
                     } ?: e.message
                     is java.net.SocketTimeoutException, is java.net.ConnectException, is java.net.NoRouteToHostException ->
-                        "No se puede llegar al Chromecast (${device.ip})." +
+                        "No se puede llegar a la tele (${device.typeLabel}, ${device.ip})." +
                             if (net.isVpnActive()) " La VPN está bloqueando la red local: activa \"permitir LAN\" en la VPN." else ""
                     else -> "Error: ${e.message ?: e.javaClass.simpleName}"
                 }

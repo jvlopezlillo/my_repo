@@ -98,6 +98,8 @@ class DlnaRenderer(
     private val onStatus: (CastStatus) -> Unit,
     private val onClosed: (String?) -> Unit,
     private val log: (String) -> Unit = {},
+    /** Tiempo máximo para SetAVTransportURI y Play: muchas teles (LG…) bajan el vídeo antes de contestar. */
+    private val slowActionTimeoutMs: Int = 45_000,
 ) : Renderer {
     @Volatile override var lastStatus = CastStatus(); private set
     @Volatile private var closed = false
@@ -241,15 +243,30 @@ class DlnaRenderer(
     }
 
     private fun soap(url: String, service: String, action: String, args: List<Pair<String, String>>): String {
+        val slow = action == "SetAVTransportURI" || action == "Play"
+        val timeout = if (slow) slowActionTimeoutMs else 8000
+        if (slow) log("DLNA: $action (la tele puede tardar hasta ${timeout / 1000} s en contestar)")
         val argXml = args.joinToString("") { (k, v) -> "<$k>${Dlna.escape(v)}</$k>" }
         val body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" " +
             "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>" +
             "<u:$action xmlns:u=\"$service\">$argXml</u:$action></s:Body></s:Envelope>"
-        val (code, text) = Http.request(open, url, "POST", body, mapOf(
-            "Content-Type" to "text/xml; charset=\"utf-8\"",
-            "SOAPACTION" to "\"$service#$action\"",
-        ))
+        val started = System.currentTimeMillis()
+        val (code, text) = try {
+            Http.request(open, url, "POST", body, mapOf(
+                "Content-Type" to "text/xml; charset=\"utf-8\"",
+                "SOAPACTION" to "\"$service#$action\"",
+            ), timeoutMs = timeout)
+        } catch (e: java.net.SocketTimeoutException) {
+            throw CastException(
+                "La tele no contestó a $action en ${timeout / 1000} s. " +
+                    if (slow) "Suele ser que no consigue descargar el vídeo (mira en el diagnóstico si pidió algo al móvil) o que no admite este formato por DLNA."
+                    else "Comprueba que está encendida y en la misma red."
+            )
+        } catch (e: java.net.ConnectException) {
+            throw CastException("No se puede conectar con la tele por DLNA (${e.message})")
+        }
+        if (slow) log("DLNA: $action contestado en ${System.currentTimeMillis() - started} ms")
         if (code >= 400) {
             val err = Dlna.tag(text, "errorDescription") ?: Dlna.tag(text, "faultstring") ?: "HTTP $code"
             throw CastException("El aparato DLNA respondió con error en $action: $err")

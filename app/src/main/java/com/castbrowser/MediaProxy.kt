@@ -196,7 +196,13 @@ class MediaProxy(
         conn.instanceFollowRedirects = true
         conn.connectTimeout = 15_000
         conn.readTimeout = 30_000
-        conn.requestMethod = if (method == "HEAD") "HEAD" else "GET"
+        // Muchos servidores no soportan HEAD: pedimos con GET y para HEAD no leemos el cuerpo.
+        conn.requestMethod = "GET"
+        if (okLogged < 8) {
+            log("Proxy: ← $method ${target.substringBefore('?').let { t -> if (t.length > 90) "…" + t.takeLast(89) else t }}" +
+                (reqHeaders["range"]?.let { " [$it]" } ?: ""))
+        }
+        val startedAt = System.currentTimeMillis()
         originHeaders.forEach { (k, v) -> conn.setRequestProperty(k, v) }
         reqHeaders["range"]?.let { conn.setRequestProperty("Range", it) }
         cookieProvider(target)?.takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("Cookie", it) }
@@ -207,9 +213,10 @@ class MediaProxy(
         }
         if (code >= 400) lastUpstreamError = code
         val shortTarget = target.substringBefore('?').let { t -> if (t.length > 90) "…" + t.takeLast(89) else t }
-        if (code >= 400 || okLogged++ < 6) {
-            log("Proxy: TV pide $shortTarget${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code")
+        if (code >= 400 || okLogged < 8) {
+            log("Proxy: $method $shortTarget${reqHeaders["range"]?.let { " [$it]" } ?: ""} → $code (${System.currentTimeMillis() - startedAt} ms)")
         }
+        okLogged++
         val stream: InputStream? = try {
             if (code >= 400) conn.errorStream else conn.inputStream
         } catch (_: Exception) { null }

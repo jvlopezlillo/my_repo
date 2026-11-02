@@ -128,6 +128,33 @@ class RendererTest {
     }
 
     @Test
+    fun dlnaToleratesSlowSetUriButTimesOutClearly() {
+        val delayMs = longArrayOf(900)
+        val tv = FakeHttp { _, _, h, _ ->
+            val action = h["soapaction"]!!.trim('"').substringAfter('#')
+            if (action == "SetAVTransportURI") Thread.sleep(delayMs[0])
+            val reply = if (action == "GetTransportInfo") "<CurrentTransportState>PLAYING</CurrentTransportState>" else ""
+            Triple(200, "text/xml", "<Envelope><Body>$reply</Body></Envelope>")
+        }
+        try {
+            val info = DlnaInfo("TV", "u", null, "${tv.base}/av", Dlna.AV_TRANSPORT, null, null)
+            // Más lenta que el límite normal de 8 s de otras acciones no hace falta: con 3 s de margen pasa.
+            DlnaRenderer(info, opener, {}, {}, slowActionTimeoutMs = 3000)
+                .load("http://x/v.m3u8", "application/x-mpegURL", "t", 0.0, false, false, emptyMap())
+
+            delayMs[0] = 1500
+            val msg = try {
+                DlnaRenderer(info, opener, {}, {}, slowActionTimeoutMs = 400)
+                    .load("http://x/v.m3u8", "application/x-mpegURL", "t", 0.0, false, false, emptyMap())
+                ""
+            } catch (e: CastException) { e.message.orEmpty() }
+            assertTrue(msg, msg.contains("no contestó a SetAVTransportURI"))
+        } finally {
+            tv.close()
+        }
+    }
+
+    @Test
     fun dlnaReportsFailureWhenTvStaysStopped() {
         val tv = FakeHttp { _, _, h, _ ->
             val action = h["soapaction"]!!.trim('"').substringAfter('#')
