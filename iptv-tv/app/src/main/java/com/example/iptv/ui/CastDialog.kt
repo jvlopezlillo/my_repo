@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
 import com.example.iptv.cast.CastController
+import com.google.android.gms.cast.CastDevice
 import com.google.android.gms.cast.CastMediaControlIntent
 
 /** Lista los Chromecast de la red y conecta con el elegido (sin MediaRouteButton: encaja con Compose). */
@@ -71,7 +72,13 @@ fun CastDeviceDialog(onDismiss: () -> Unit) {
                     }
                 }
                 routes.forEach { route ->
-                    Button(onClick = { router.selectRoute(route); onDismiss() }, modifier = Modifier.fillMaxWidth()) {
+                    Button(onClick = {
+                        val dev = CastDevice.getFromBundle(route.extras)
+                        DebugLog.log("Chromecast elegido: «${route.name}» ip=${dev?.inetAddress?.hostAddress} modelo=${dev?.modelName}")
+                        CastController.logNetwork(ctx)
+                        router.selectRoute(route)
+                        onDismiss()
+                    }, modifier = Modifier.fillMaxWidth()) {
                         Text(route.name)
                     }
                 }

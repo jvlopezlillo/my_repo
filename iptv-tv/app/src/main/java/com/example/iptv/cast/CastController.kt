@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.example.iptv.data.Channel
 import com.example.iptv.data.UA
+import com.google.android.gms.cast.CastStatusCodes
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
@@ -341,6 +342,13 @@ object CastController {
         }.start()
     }
 
+    private fun codeText(code: Int) = "$code (${CastStatusCodes.getStatusCodeString(code)})"
+
+    /** Anota en el registro la red del móvil (para comparar con la del Chromecast). */
+    fun logNetwork(ctx: Context) {
+        DebugLog.log("red del móvil: ip=${localLanIp(ctx)} VPN=${vpnActive(ctx)}")
+    }
+
     /** Dirección que se puede abrir desde otro dispositivo de la Wi-Fi para comprobar que llega al móvil. */
     var testUrl by mutableStateOf<String?>(null)
         private set
@@ -467,13 +475,13 @@ object CastController {
         override fun onSessionStarting(s: CastSession) { DebugLog.log("Sesión Cast: iniciando…") }
         override fun onSessionStarted(s: CastSession, sessionId: String) { attach(s) }
         override fun onSessionStartFailed(s: CastSession, code: Int) {
-            DebugLog.log("Sesión Cast: fallo al iniciar (código $code)")
+            DebugLog.log("Sesión Cast: fallo al iniciar, código ${codeText(code)}")
             error = "No se pudo conectar con el Chromecast (código $code)"
             connectedName = null
         }
         override fun onSessionEnding(s: CastSession) {}
         override fun onSessionEnded(s: CastSession, code: Int) {
-            DebugLog.log("Sesión Cast: terminada (código $code)")
+            DebugLog.log("Sesión Cast: terminada, código ${codeText(code)}")
             connectedName = null
             attempt = null
             stopRelay()
@@ -481,9 +489,9 @@ object CastController {
         override fun onSessionResuming(s: CastSession, sessionId: String) {}
         override fun onSessionResumed(s: CastSession, wasSuspended: Boolean) { attach(s) }
         override fun onSessionResumeFailed(s: CastSession, code: Int) {
-            DebugLog.log("Sesión Cast: no se pudo reanudar (código $code)")
+            DebugLog.log("Sesión Cast: no se pudo reanudar, código ${codeText(code)}")
             connectedName = null
         }
-        override fun onSessionSuspended(s: CastSession, reason: Int) { DebugLog.log("Sesión Cast: suspendida (motivo $reason)") }
+        override fun onSessionSuspended(s: CastSession, reason: Int) { DebugLog.log("Sesión Cast: suspendida, motivo ${codeText(reason)}") }
     }
 }
