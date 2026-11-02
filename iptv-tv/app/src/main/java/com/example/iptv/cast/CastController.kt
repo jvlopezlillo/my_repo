@@ -63,7 +63,7 @@ object CastController {
 
     private enum class Kind { HLS, TS, OTHER, ERROR }
     private enum class Mode { DIRECT, RELAY }
-    private class Probe(val url: String, val kind: Kind, val http: Int, val contentType: String?)
+    private class Probe(val url: String, val kind: Kind, val http: Int, val contentType: String?, val cors: String? = null)
 
     /** Estado de un envío: qué caminos se han probado y si el Chromecast ha avanzado. */
     private class Attempt(val token: Int, val channel: Channel, val probe: Probe, val client: OkHttpClient) {
@@ -72,6 +72,7 @@ object CastController {
         var triedRelay = false
         var progressed = false
         var finished = false
+        var restarts = 0
     }
     private var attempt: Attempt? = null
 
@@ -147,7 +148,7 @@ object CastController {
                 p = probe(candidate, client)
             }
             if (candidate == url) original = p
-            DebugLog.log("sonda ${DebugLog.redact(candidate)} → ${p.kind} http=${p.http} tipo=${p.contentType}")
+            DebugLog.log("sonda ${DebugLog.redact(candidate)} → ${p.kind} http=${p.http} tipo=${p.contentType} cors=${p.cors}")
             if (p.kind == Kind.HLS) return p
             if (first == null) first = p
         }
@@ -179,7 +180,8 @@ object CastController {
 
     private fun probe(url: String, client: OkHttpClient): Probe {
         return try {
-            val req = Request.Builder().url(url).header("User-Agent", UA).get().build()
+            // El Origin del receptor de Google: así se ve si el servidor permite CORS (necesario para enviar en directo).
+            val req = Request.Builder().url(url).header("User-Agent", UA).header("Origin", "https://www.gstatic.com").get().build()
             val quick = client.newBuilder()
                 .connectTimeout(6, TimeUnit.SECONDS)
                 .readTimeout(8, TimeUnit.SECONDS)
@@ -188,6 +190,7 @@ object CastController {
             quick.newCall(req).execute().use { r ->
                 val ct = r.header("Content-Type")
                 if (!r.isSuccessful) {
+                    DebugLog.log("sonda: HTTP ${r.code} ${DebugLog.describeError(r)}")
                     Probe(url, Kind.ERROR, r.code, ct)
                 } else {
                     val src = r.body!!.source()
@@ -200,7 +203,7 @@ object CastController {
                         ct?.contains("mp2t", ignoreCase = true) == true -> Kind.TS
                         else -> Kind.OTHER
                     }
-                    Probe(r.request.url.toString(), kind, r.code, ct)
+                    Probe(r.request.url.toString(), kind, r.code, ct, r.header("Access-Control-Allow-Origin"))
                 }
             }
         } catch (e: Exception) {
@@ -300,6 +303,15 @@ object CastController {
             }
     }
 
+    private fun restart(att: Attempt, why: String) {
+        att.restarts++
+        att.finished = false
+        att.progressed = false
+        DebugLog.log("$why: se vuelve a enviar (${att.restarts}/2)")
+        status = "Reconectando…"
+        main.postDelayed({ if (attempt === att) send(att, att.mode) }, 1500)
+    }
+
     private fun fail(att: Attempt, message: String) {
         att.finished = true
         status = null
@@ -329,11 +341,21 @@ object CastController {
                 ". Prueba «Duplicar pantalla» (Transmitir pantalla de Android) o un canal con versión HLS."
         } else "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo."
 
+    private fun denied(code: Int) {
+        main.post {
+            if (attempt != null) {
+                error = "El proveedor del canal rechaza la conexión (HTTP $code). Suele deberse al límite de conexiones simultáneas " +
+                    "de tu lista (otro dispositivo usándola a la vez) o a demasiados intentos seguidos: espera unos minutos."
+            }
+        }
+    }
+
     private fun ensureRelay(ctx: Context, client: OkHttpClient): CastRelay? {
-        relay?.let { it.client = client; return it }
+        relay?.let { it.client = client; it.onDenied = ::denied; return it }
         return try {
             CastRelay(client).also {
                 it.start(30_000, true)
+                it.onDenied = ::denied
                 relay = it
                 ContextCompat.startForegroundService(ctx, Intent(ctx, CastRelayService::class.java))
                 DebugLog.log("servidor local en el puerto ${it.listeningPort}")
@@ -522,7 +544,15 @@ object CastController {
                 st.playerState == MediaStatus.PLAYER_STATE_BUFFERING -> att?.progressed = true
                 st.playerState == MediaStatus.PLAYER_STATE_IDLE && st.idleReason == MediaStatus.IDLE_REASON_ERROR -> {
                     if (att != null && !att.finished) fallbackFromError(att)
+                    else if (att != null && att.restarts < 2) restart(att, "error durante la reproducción")
                     else error = "El Chromecast no pudo reproducir este canal. Comparte el registro para diagnosticarlo."
+                }
+                // Un directo no debería "terminar": si ya se estaba reproduciendo, se vuelve a enviar
+                st.playerState == MediaStatus.PLAYER_STATE_IDLE && st.idleReason == MediaStatus.IDLE_REASON_FINISHED -> {
+                    if (att != null && att.finished) {
+                        if (att.restarts < 2) restart(att, "el directo se cortó")
+                        else error = "La emisión se cortó varias veces. Si el proveedor limita las conexiones simultáneas, comprueba que no haya otro dispositivo usando la lista."
+                    }
                 }
             }
         }

@@ -134,13 +134,25 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
         }
     }
 
+    /** Se llama cuando el origen sigue rechazando tras los reintentos (p. ej. límite de conexiones). */
+    @Volatile var onDenied: ((Int) -> Unit)? = null
+
     private fun proxy(target: String): Response {
         val req = Request.Builder().url(target).header("User-Agent", UA).get().build()
-        val resp = client.newCall(req).execute()
+        var resp = client.newCall(req).execute()
+        var tries = 0
+        while (!resp.isSuccessful && resp.code in RETRYABLE && tries < 2) {
+            DebugLog.log("relay ✗ origen ${resp.code} ${DebugLog.describeError(resp)} · reintento ${tries + 1}/2")
+            resp.close()
+            Thread.sleep(1000L * (tries + 1))
+            resp = client.newCall(req).execute()
+            tries++
+        }
         if (!resp.isSuccessful) {
             val code = resp.code
+            DebugLog.log("relay ✗ el origen respondió $code ${DebugLog.describeError(resp)}")
             resp.close()
-            DebugLog.log("relay ✗ el origen respondió $code")
+            if (code in RETRYABLE) onDenied?.invoke(code)
             val status = Status.values().firstOrNull { it.requestStatus == code } ?: Status.SERVICE_UNAVAILABLE
             return cors(newFixedLengthResponse(status, "text/plain", "Origen respondió $code"))
         }
@@ -227,5 +239,6 @@ class CastRelay(@Volatile var client: OkHttpClient) : NanoHTTPD(0) {
 
     private companion object {
         val URI_ATTR = Regex("""URI="([^"]*)"""")
+        val RETRYABLE = setOf(403, 429, 503)
     }
 }

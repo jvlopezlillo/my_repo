@@ -46,6 +46,17 @@ object DebugLog {
         lines.forEach { appendLine(it) }
     }
 
+    /** Resume una respuesta de error del servidor (cabeceras útiles y un trozo del cuerpo, sin URLs ni etiquetas). */
+    fun describeError(r: okhttp3.Response): String {
+        val body = runCatching { r.peekBody(300).string() }.getOrDefault("")
+            .replace(Regex("<[^>]*>"), " ")
+            .replace(Regex("https?://\\S+"), "<url>")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(120)
+        return "server=${r.header("Server")} retry-after=${r.header("Retry-After")} cuerpo=«$body»"
+    }
+
     /** Oculta rutas (pueden llevar usuario/contraseña) y valores de parámetros; deja host, nº de segmentos y extensión. */
     fun redact(url: String): String {
         val u = url.toHttpUrlOrNull() ?: return "(dirección no válida)"
