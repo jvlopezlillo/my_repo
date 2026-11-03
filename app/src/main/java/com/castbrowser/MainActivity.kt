@@ -682,7 +682,12 @@ class MainActivity : Activity() {
         return h
     }
 
-    private fun startCast(device: CastDevice, cand: MediaCandidate, sample: Boolean = false) {
+    private fun startCast(deviceIn: CastDevice, cand: MediaCandidate, sample: Boolean = false) {
+        // Si el "DLNA" elegido es en realidad nuestra app de la tele, se usa la app: puede empujar el vídeo
+        // (sirve con VPN) y entiende cookies y cabeceras. El DLNA necesita que la tele conecte con el móvil.
+        val device = if (deviceIn.type == CastDevice.TYPE_DLNA)
+            discovery.availableDevices().firstOrNull { it.type == CastDevice.TYPE_TV && it.ip == deviceIn.ip } ?: deviceIn
+        else deviceIn
         val video = if (sample) null else lastVideo
         val title = if (sample) "Vídeo de prueba" else video?.title?.ifEmpty { null } ?: webView.title ?: "Vídeo"
         val start = video?.time ?: 0.0
@@ -694,6 +699,7 @@ class MainActivity : Activity() {
         castDevice = device
         webView.evaluateJavascript("window.__castPauseAll && window.__castPauseAll()", null)
         diag("──── Enviar a ${device.name} (${device.ip}:${device.port}, ${device.via})")
+        if (device !== deviceIn) diag("Ese DLNA es la app CastBrowser TV: se usa la app (mejor con VPN)")
         diag("Vídeo: ${cand.kind} ${cand.url.take(200)}")
         diag("VPN activa: ${net.isVpnActive()} · modo: $mode")
         diag("Redes locales: ${net.localLinks().joinToString { it.label }.ifEmpty { "ninguna" }}")

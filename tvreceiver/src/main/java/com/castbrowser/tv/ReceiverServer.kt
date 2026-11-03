@@ -71,7 +71,8 @@ class ReceiverServer(
                 // El reproductor de esta misma tele lee el vídeo empujado.
                 if ((method == "GET" || method == "HEAD") && path.startsWith("/live/")) {
                     s.soTimeout = 0
-                    PushStreams.serveLive(path.removePrefix("/live/").substringBefore('.'), s.getOutputStream())
+                    val from = Regex("bytes=(\\d+)-").find(headers["range"].orEmpty())?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                    PushStreams.serveLive(path.removePrefix("/live/").substringBefore('.'), s.getOutputStream(), from)
                     return
                 }
                 val len = headers["content-length"]?.toIntOrNull() ?: 0

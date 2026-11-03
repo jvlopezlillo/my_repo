@@ -122,5 +122,6 @@ object PlayerHub {
             .put("error", error)
             .put("title", title)
             .put("video", video)
+            .put("detail", PushStreams.eventsText())
     }
 }

@@ -290,4 +290,42 @@ class RendererTest {
             tv.close()
         }
     }
+
+    @Test
+    fun dlnaTransitioningForeverIsAFailure() {
+        val tv = FakeHttp { _, _, h, _ ->
+            val action = h["soapaction"]!!.trim('"').substringAfter('#')
+            val reply = if (action == "GetTransportInfo") "<CurrentTransportState>TRANSITIONING</CurrentTransportState>" else ""
+            Triple(200, "text/xml", "<Envelope><Body>$reply</Body></Envelope>")
+        }
+        try {
+            val info = DlnaInfo("TV", "u", null, "${tv.base}/av", Dlna.AV_TRANSPORT, null, null)
+            val msg = try {
+                DlnaRenderer(info, opener, {}, {}, playTimeoutMs = 1500)
+                    .load("http://x/v.ts", "video/mp2t", "t", 0.0, false, false, emptyMap()); ""
+            } catch (e: CastException) { e.message.orEmpty() }
+            assertTrue(msg, msg.contains("no empezó a reproducir") && msg.contains("TRANSITIONING"))
+        } finally {
+            tv.close()
+        }
+    }
+
+    @Test
+    fun dlnaAbortCheckCutsTheWait() {
+        val tv = FakeHttp { _, _, h, _ ->
+            val action = h["soapaction"]!!.trim('"').substringAfter('#')
+            val reply = if (action == "GetTransportInfo") "<CurrentTransportState>TRANSITIONING</CurrentTransportState>" else ""
+            Triple(200, "text/xml", "<Envelope><Body>$reply</Body></Envelope>")
+        }
+        try {
+            val info = DlnaInfo("TV", "u", null, "${tv.base}/av", Dlna.AV_TRANSPORT, null, null)
+            val r = DlnaRenderer(info, opener, {}, {}, playTimeoutMs = 30_000)
+            r.setAbortCheck { if (it > 1200) "la tele no llega al móvil" else null }
+            val msg = try { r.load("http://x/v.ts", "video/mp2t", "t", 0.0, false, false, emptyMap()); "" }
+            catch (e: CastException) { e.message.orEmpty() }
+            assertEquals("la tele no llega al móvil", msg)
+        } finally {
+            tv.close()
+        }
+    }
 }

@@ -90,7 +90,9 @@ class PlayerActivity : Activity(), PlayerControl {
         req.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.let { http.setUserAgent(it.value) }
 
         val p = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(http))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(
+                androidx.media3.datasource.DataSource.Factory { RoutingDataSource(http.createDataSource(), PushDataSource()) }
+            ))
             .build()
         player = p
         view.player = p
@@ -102,7 +104,7 @@ class PlayerActivity : Activity(), PlayerControl {
             else -> null
         }
         val item = MediaItem.Builder()
-            .setUri(Uri.parse(req.url))
+            .setUri(playableUri(req.url))
             .setMimeType(mime)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(req.title).build())
             .build()
@@ -111,11 +113,19 @@ class PlayerActivity : Activity(), PlayerControl {
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 if (videoSize.width > 0) PlayerHub.video = "${videoSize.width}x${videoSize.height}"
             }
-            override fun onPlaybackStateChanged(state: Int) = updateState()
+            override fun onPlaybackStateChanged(state: Int) {
+                PushStreams.event("ExoPlayer estado " + when (state) {
+                    Player.STATE_IDLE -> "IDLE"; Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"; Player.STATE_ENDED -> "ENDED"; else -> state.toString()
+                })
+                updateState()
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) = updateState()
             override fun onPlayerError(error: PlaybackException) {
+                val detail = error.errorCodeName + ": " + (error.cause?.message ?: error.message)
+                PushStreams.event("ExoPlayer error $detail")
                 PlayerHub.state = "error"
-                PlayerHub.error = describe(error)
+                PlayerHub.error = describe(error) + " [" + detail + "]"
                 titleView.text = "No se pudo reproducir: ${PlayerHub.error}"
                 titleView.visibility = View.VISIBLE
             }
@@ -127,6 +137,12 @@ class PlayerActivity : Activity(), PlayerControl {
         titleView.text = req.title
         titleView.visibility = View.VISIBLE
         main.postDelayed({ if (PlayerHub.state != "error") titleView.visibility = View.GONE }, 5000)
+    }
+
+    /** Un vídeo empujado desde el móvil (http://127.0.0.1:…/live/<id>.ts) se lee directamente de la memoria. */
+    private fun playableUri(url: String): Uri {
+        val m = Regex("^http://127\\.0\\.0\\.1:\\d+/live/([^./?]+)").find(url)
+        return if (m != null) Uri.parse("push://${m.groupValues[1]}") else Uri.parse(url)
     }
 
     private fun updateState() {

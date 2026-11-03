@@ -76,7 +76,12 @@ class TvReceiverRenderer(
             abortCheck?.invoke(System.currentTimeMillis() - sentAt)?.let { throw CastException(it) }
             val st = fetchStatus() ?: continue
             val state = st.optString("state")
-            if (state != last) { log("TV: estado $state"); last = state }
+            if (state != last) {
+                log("TV: estado $state"); last = state
+                if (state == "ended" || state == "error") {
+                    st.optString("detail").takeIf { it.isNotEmpty() }?.let { log("TV: detalle: $it") }
+                }
+            }
             when (state) {
                 "playing", "paused" -> {
                     Thread(::pollLoop, "tv-poll").apply { isDaemon = true }.start()

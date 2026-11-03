@@ -105,7 +105,12 @@ class DlnaRenderer(
     private val log: (String) -> Unit = {},
     /** Tiempo máximo para SetAVTransportURI y Play: muchas teles (LG…) bajan el vídeo antes de contestar. */
     private val slowActionTimeoutMs: Int = 45_000,
+    /** Tiempo máximo hasta que la tele pasa a PLAYING. */
+    private val playTimeoutMs: Long = 45_000,
 ) : Renderer {
+    @Volatile private var abortCheck: ((Long) -> String?)? = null
+    override fun setAbortCheck(check: ((Long) -> String?)?) { abortCheck = check }
+
     @Volatile override var lastStatus = CastStatus(); private set
     @Volatile private var closed = false
     @Volatile private var started = false
@@ -163,10 +168,12 @@ class DlnaRenderer(
         // Esperamos a que pase a PLAYING (o a que se pare, que indica error).
         val begin = System.currentTimeMillis()
         var stoppedSince = 0L
+        var lastLogged: String? = null
         while (true) {
             val elapsed = System.currentTimeMillis() - begin
+            abortCheck?.invoke(elapsed)?.let { throw CastException(it) }
             val state = transportState()
-            if (state != null) log("DLNA: estado $state")
+            if (state != null && state != lastLogged) { log("DLNA: estado $state"); lastLogged = state }
             when (state) {
                 "PLAYING" -> break
                 "STOPPED", "NO_MEDIA_PRESENT" -> {
@@ -177,9 +184,9 @@ class DlnaRenderer(
                 }
                 else -> stoppedSince = 0L
             }
-            if (elapsed > 45_000) {
-                if (state == "TRANSITIONING") break
-                throw CastException("El aparato DLNA no empezó a reproducir en 45 s")
+            if (elapsed > playTimeoutMs) {
+                // "Cargando" tanto tiempo sin pasar a reproducir es un fallo, no un éxito.
+                throw CastException("El aparato DLNA no empezó a reproducir en ${playTimeoutMs / 1000} s (estado: ${state ?: "sin respuesta"})")
             }
             Thread.sleep(1000)
         }
