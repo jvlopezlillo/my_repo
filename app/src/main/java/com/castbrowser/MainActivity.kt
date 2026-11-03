@@ -401,11 +401,12 @@ class MainActivity : Activity() {
                     noteBlocked("publicidad", url)
                     return WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)))
                 }
+                val h = HashMap<String, String>()
+                request.requestHeaders.forEach { (k, v) ->
+                    if (k.equals("Referer", true) || k.equals("User-Agent", true) || k.equals("Origin", true)) h[k] = v
+                }
+                captures.noteRequest(url, h)
                 if (MediaDetector.classify(url) != null) {
-                    val h = HashMap<String, String>()
-                    request.requestHeaders.forEach { (k, v) ->
-                        if (k.equals("Referer", true) || k.equals("User-Agent", true) || k.equals("Origin", true)) h[k] = v
-                    }
                     captures.add(url, h)
                     main.post { onStreamCaptured() }
                 }
@@ -536,6 +537,18 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ detección de vídeo
 
     private inner class Bridge {
+        /** Lista HLS/DASH reconocida por su contenido desde el JavaScript de la página. */
+        @JavascriptInterface
+        fun onStream(url: String, kind: String, page: String) {
+            if (!url.startsWith("http") || (kind != "hls" && kind != "dash")) return
+            val h = HashMap<String, String>()
+            h["User-Agent"] = userAgent
+            if (page.startsWith("http")) h["Referer"] = page
+            captures.addKnown(url, h, kind)
+            diag("Detectado por contenido ($kind): ${url.take(160)}")
+            main.post { onStreamCaptured() }
+        }
+
         @JavascriptInterface
         fun onMedia(json: String) {
             try {
@@ -601,11 +614,16 @@ class MainActivity : Activity() {
         }
         val candidates = captures.candidates(lastVideo)
         if (candidates.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("No se puede enviar este vídeo")
-                .setMessage("La página no expone una dirección de vídeo normal (suele pasar con vídeos con DRM, como Netflix, o con YouTube). Prueba a darle al play primero y vuelve a pulsar.")
+            val recent = captures.recent()
+            diag("Sin vídeo detectado. <video>: ${lastVideo?.src?.take(120) ?: "ninguno"} · peticiones de interés: ${recent.size}")
+            recent.take(10).forEach { diag("  vista: ${it.first.take(180)}") }
+            val b = AlertDialog.Builder(this)
+                .setTitle("No encuentro el vídeo de esta página")
+                .setMessage("La página no deja ver una dirección de vídeo normal. Si es un vídeo con DRM (Netflix, Prime Video…) o de YouTube, no se puede enviar. " +
+                    "Si no, dale al play y vuelve a pulsar" + if (recent.isNotEmpty()) ", o elige a mano entre lo que ha cargado la página." else ".")
                 .setPositiveButton("Vale", null)
-                .show()
+            if (recent.isNotEmpty()) b.setNeutralButton("Ver lo que ha cargado (${recent.size})") { _, _ -> showRecentRequests(recent) }
+            b.show()
             return
         }
         val devices = discovery.availableDevices()
@@ -614,6 +632,67 @@ class MainActivity : Activity() {
             return
         }
         showDevicePicker(candidates, 0)
+    }
+
+    /** Lo que ha cargado la página y podría ser vídeo: se elige a mano y se comprueba qué es. */
+    private fun showRecentRequests(recent: List<Pair<String, Map<String, String>>>) {
+        val labels = recent.map { (u, _) ->
+            val host = u.substringAfter("://").substringBefore('/')
+            val file = u.substringBefore('?').substringAfterLast('/').ifEmpty { "/" }
+            "$file\n$host"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Lo que ha cargado la página")
+            .setItems(labels) { _, which -> probeAndCast(recent[which].first, recent[which].second) }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun fetchHead(u: String, headers: Map<String, String>): Pair<String?, String>? = try {
+        val c = URL(u).openConnection() as HttpURLConnection
+        c.connectTimeout = 5000
+        c.readTimeout = 5000
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        CookieManager.getInstance().getCookie(u)?.let { c.setRequestProperty("Cookie", it) }
+        if (c.responseCode >= 400) null else {
+            val buf = ByteArray(4096)
+            val n = c.inputStream.use { it.read(buf) }.coerceAtLeast(0)
+            val ct = c.contentType
+            c.disconnect()
+            ct to String(buf, 0, n, Charsets.ISO_8859_1)
+        }
+    } catch (_: Exception) { null }
+
+    /** Mira qué devuelve esa dirección (y, si es un trozo suelto, dónde puede estar su lista) y la envía. */
+    private fun probeAndCast(url: String, headers: Map<String, String>) {
+        toast("Comprobando…")
+        Thread {
+            val h = headersFor(MediaCandidate(url, headers, "file"))
+            val tries = ArrayList<String>()
+            tries.add(url)
+            if (MediaDetector.looksLikeSegment(url)) tries.addAll(MediaDetector.siblingPlaylists(url))
+            var found: MediaCandidate? = null
+            for (u in tries) {
+                val (ct, head) = fetchHead(u, h) ?: continue
+                val kind = MediaDetector.kindFromContent(ct, head) ?: continue
+                if (kind == "file" && MediaDetector.looksLikeSegment(u)) continue
+                found = MediaCandidate(u, h, kind)
+                break
+            }
+            main.post {
+                val f = found
+                if (f == null) {
+                    diag("A mano: no parece un vídeo enviable (${tries.size} direcciones probadas): ${url.take(160)}")
+                    AlertDialog.Builder(this).setTitle("No se puede enviar")
+                        .setMessage("Eso no parece un vídeo que se pueda enviar (o pide una clave que solo vale dentro de la página).")
+                        .setPositiveButton("Vale", null).show()
+                } else {
+                    diag("Detectado a mano (${f.kind}): ${f.url.take(160)}")
+                    captures.addKnown(f.url, f.headers, f.kind)
+                    onCastButton(false)
+                }
+            }
+        }.start()
     }
 
     private fun showDevicePicker(candidates: List<MediaCandidate>, chosen: Int, sample: Boolean = false) {

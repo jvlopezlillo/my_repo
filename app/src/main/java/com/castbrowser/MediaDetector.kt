@@ -58,6 +58,54 @@ object MediaDetector {
         }
     }
 
+    // Peticiones que merece la pena enseñar al usuario si no se encuentra el vídeo.
+    private val boring = Regex("""\.(js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|map|html?)($|[?#])""", RegexOption.IGNORE_CASE)
+    private val mediaHint = Regex(
+        """(\.(ts|m4s|m4v|mp4|webm|aac|mp3|m3u8|mpd|flv)($|[?#])|/(hls|dash|live|stream|video|media|manifest|playlist|chunk|seg)|m3u8|mpd|manifest|playlist)""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    fun isInteresting(url: String): Boolean =
+        url.startsWith("http") && !boring.containsMatchIn(url) && mediaHint.containsMatchIn(url)
+
+    /** ¿Es un trozo suelto de vídeo (que no sirve por sí solo)? */
+    fun looksLikeSegment(url: String): Boolean = segment.containsMatchIn(url)
+
+    /** Qué es lo que devuelve una dirección, según su cabecera Content-Type y sus primeros bytes. */
+    fun kindFromContent(contentType: String?, head: String): String? {
+        val ct = contentType.orEmpty().lowercase()
+        val t = head.trimStart('\uFEFF', ' ', '\n', '\r', '\t')
+        return when {
+            t.startsWith("#EXTM3U") -> "hls"
+            Regex("""^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<MPD[\s>]""", RegexOption.IGNORE_CASE).containsMatchIn(t) -> "dash"
+            ct.contains("mpegurl") -> "hls"
+            ct.contains("dash+xml") -> "dash"
+            ct.startsWith("video/") || ct.startsWith("audio/") -> "file"
+            else -> null
+        }
+    }
+
+    private val playlistNames = listOf(
+        "playlist.m3u8", "index.m3u8", "master.m3u8", "chunklist.m3u8", "stream.m3u8",
+        "live.m3u8", "manifest.m3u8", "video.m3u8", "prog_index.m3u8",
+    )
+
+    /** A partir de un trozo de vídeo, direcciones donde suele estar su lista de reproducción. */
+    fun siblingPlaylists(segmentUrl: String): List<String> {
+        val query = segmentUrl.substringAfter('?', "").let { if (it.isEmpty()) "" else "?$it" }
+        val dir = segmentUrl.substringBefore('?').substringBeforeLast('/') + "/"
+        val parent = dir.trimEnd('/').substringBeforeLast('/') + "/"
+        val out = LinkedHashSet<String>()
+        for (d in listOf(dir, parent)) {
+            if (!d.contains("://") || d.substringAfter("://").isEmpty() || d.endsWith("://")) continue
+            for (n in playlistNames) {
+                if (query.isNotEmpty()) out.add(d + n + query)
+                out.add(d + n)
+            }
+        }
+        return out.toList()
+    }
+
     /** JavaScript que se inyecta en todos los marcos (iframes incluidos). */
     val SCRIPT = """
 (function(){
@@ -87,6 +135,70 @@ object MediaDetector {
       report(v, n);
     }, true);
   });
+  // Detecta listas HLS/DASH por su CONTENIDO aunque su dirección no acabe en .m3u8 / .mpd.
+  var seen = {};
+  function abs(u){ try { return new URL(u, location.href).href; } catch (e) { return u; } }
+  function reportStream(u, kind){
+    try {
+      u = abs(u);
+      if (!/^https?:/.test(u) || seen[u]) return;
+      seen[u] = 1;
+      CastBridge.onStream(u, kind, location.href);
+    } catch (e) {}
+  }
+  function check(u, text){
+    var t = String(text).replace(/^\uFEFF/, '').replace(/^\s+/, '');
+    if (t.indexOf('#EXTM3U') === 0) reportStream(u, 'hls');
+    else if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<MPD[\s>]/i.test(t)) reportStream(u, 'dash');
+  }
+  function bytesToText(b){
+    var s = '';
+    for (var i = 0; i < b.length && i < 256; i++) s += String.fromCharCode(b[i]);
+    return s;
+  }
+  if (window.fetch) {
+    var origFetch = window.fetch;
+    window.fetch = function(){
+      var args = arguments;
+      return origFetch.apply(this, args).then(function(res){
+        try {
+          var u = res.url || (typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url));
+          var ct = ((res.headers && res.headers.get('content-type')) || '').toLowerCase();
+          if (/mpegurl/.test(ct)) reportStream(u, 'hls');
+          else if (/dash\+xml/.test(ct)) reportStream(u, 'dash');
+          else if (/(text\/plain|octet-stream|\/xml|^$)/.test(ct) && !/\.(ts|m4s|mp4|aac|mp3|webm|jpe?g|png|gif)(\?|$)/i.test(u || '')) {
+            var c = res.clone();
+            var rd = c.body && c.body.getReader && c.body.getReader();
+            if (rd) rd.read().then(function(r){
+              if (r && r.value) check(u, bytesToText(r.value));
+              try { rd.cancel(); } catch (e) {}
+            }).catch(function(){});
+          }
+        } catch (e) {}
+        return res;
+      });
+    };
+  }
+  var xhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(m, u){ this.__castUrl = u; return xhrOpen.apply(this, arguments); };
+  var xhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(){
+    this.addEventListener('load', function(){
+      try {
+        var u = this.responseURL || this.__castUrl;
+        var ct = (this.getResponseHeader('content-type') || '').toLowerCase();
+        if (/mpegurl/.test(ct)) { reportStream(u, 'hls'); return; }
+        if (/dash\+xml/.test(ct)) { reportStream(u, 'dash'); return; }
+        if (this.responseType === '' || this.responseType === 'text') {
+          if (this.responseText) check(u, this.responseText.substring(0, 256));
+        } else if (this.responseType === 'arraybuffer' && this.response && !/\.(ts|m4s|mp4|aac|mp3|webm)(\?|$)/i.test(u || '')) {
+          check(u, bytesToText(new Uint8Array(this.response, 0, Math.min(256, this.response.byteLength))));
+        }
+      } catch (e) {}
+    });
+    return xhrSend.apply(this, arguments);
+  };
+
   function pauseAll(){
     document.querySelectorAll('video,audio').forEach(function(v){ try { v.pause(); } catch(e){} });
     for (var i = 0; i < window.frames.length; i++) { try { window.frames[i].postMessage({__castPause:1}, '*'); } catch(e){} }
@@ -108,7 +220,26 @@ class CaptureLog {
         while (items.size > 40) items.removeAt(0)
     }
 
-    fun clear() = items.clear()
+    private val recentUrls = CopyOnWriteArrayList<Pair<String, Map<String, String>>>()
+
+    /** Una lista HLS/DASH reconocida por su contenido (no por su dirección). */
+    fun addKnown(url: String, headers: Map<String, String>, kind: String) {
+        if (items.any { it.url == url }) return
+        items.add(MediaCandidate(url, headers, kind))
+        while (items.size > 40) items.removeAt(0)
+    }
+
+    /** Anota una petición que podría ser de vídeo, para enseñarla si no se encuentra nada. */
+    fun noteRequest(url: String, headers: Map<String, String>) {
+        if (!MediaDetector.isInteresting(url) || recentUrls.any { it.first == url }) return
+        recentUrls.add(url to headers)
+        while (recentUrls.size > 40) recentUrls.removeAt(0)
+    }
+
+    /** Las peticiones de interés, de la más reciente a la más antigua. */
+    fun recent(): List<Pair<String, Map<String, String>>> = recentUrls.reversed()
+
+    fun clear() { items.clear(); recentUrls.clear() }
 
     fun headersFor(url: String): Map<String, String>? = items.firstOrNull { it.url == url }?.headers
 
