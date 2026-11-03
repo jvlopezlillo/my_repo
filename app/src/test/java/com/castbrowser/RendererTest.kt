@@ -185,7 +185,7 @@ class RendererTest {
                     Triple(200, "application/json", """{"ok":true}""")
                 }
                 path == "/status" -> Triple(200, "application/json",
-                    """{"state":"$state","position":12.5,"duration":100,"volume":0.5}""")
+                    """{"state":"$state","position":12.5,"duration":100,"volume":0.5,"video":"1920x1080"}""")
                 path == "/control" -> { controls.add(JSONObject(body).getString("action")); Triple(200, "application/json", "{}") }
                 else -> Triple(404, "text/plain", "")
             }
@@ -193,7 +193,8 @@ class RendererTest {
         try {
             val port = URL(tv.base).port
             var closed = false
-            val r = TvReceiverRenderer("127.0.0.1", port, opener, {}, { closed = true })
+            val logs = CopyOnWriteArrayList<String>()
+            val r = TvReceiverRenderer("127.0.0.1", port, opener, {}, { closed = true }, { logs.add(it) })
             r.connect()
             r.load("https://cdn/x.m3u8", "application/x-mpegURL", "Peli", 30.0, false, false,
                 mapOf("Referer" to "https://page/", "Cookie" to "a=1"))
@@ -202,6 +203,7 @@ class RendererTest {
             assertEquals(30.0, played!!.getDouble("position"), 0.01)
             assertEquals("PLAYING", r.lastStatus.playerState)
             assertEquals(100.0, r.lastStatus.duration, 0.01)
+            assertTrue(logs.toString(), logs.any { it.contains("reproduciendo a 1920x1080") })
             r.stop()
             assertTrue(closed)
             assertTrue(controls.contains("stop"))

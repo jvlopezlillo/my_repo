@@ -33,6 +33,18 @@ class HlsRelayTest {
     }
 
     @Test
+    fun listsQualitiesBestFirst() {
+        val master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360\nlow.m3u8\n" +
+            "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\nhd.m3u8\n"
+        val v = Hls.variants(master, "https://cdn.x/a/m.m3u8")
+        assertEquals(listOf("1920x1080 5.0 Mbps", "640x360 0.8 Mbps"), v.map { it.label })
+        assertEquals("https://cdn.x/a/hd.m3u8", v[0].url)
+        assertEquals("https://cdn.x/a/hd.m3u8", Hls.pickVariant(master, "https://cdn.x/a/m.m3u8"))
+        // Lista simple: no hay calidades.
+        assertTrue(Hls.variants("#EXTM3U\n#EXTINF:2,\na.ts\n", "https://x/").isEmpty())
+    }
+
+    @Test
     fun vodIsConcatenatedFromTheStart() {
         val base = "https://cdn.x/v/"
         val files = mapOf(

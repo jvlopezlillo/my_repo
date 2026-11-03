@@ -502,6 +502,7 @@ class MainActivity : Activity() {
         m.menu.add(0, 7, 0, "Probar con vídeo de ejemplo")
         m.menu.add(0, 9, 0, "Protección anti-publicidad: " +
             (if (shield) "ACTIVADA ($blockedTotal bloqueos)" else "desactivada"))
+        m.menu.add(0, 10, 0, "Calidad de vídeo HLS: " + if (hlsFixedQuality()) "fija (la mejor)" else "automática")
         m.menu.add(0, 8, 0, "Diagnóstico (registro)")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -513,6 +514,11 @@ class MainActivity : Activity() {
                 6 -> webView.loadUrl(prefs.getString("home", HOME)!!)
                 7 -> showDevicePicker(SAMPLES, 0, sample = true)
                 8 -> showDiagnostics()
+                10 -> {
+                    val fixed = !hlsFixedQuality()
+                    prefs.edit().putString("hlsQuality", if (fixed) "fixed" else "auto").apply()
+                    toast(if (fixed) "Calidad fija: la mejor hasta 8 Mbps" else "Calidad automática: la elige la tele")
+                }
                 9 -> {
                     shield = !shield
                     prefs.edit().putBoolean("shield", shield).apply()
@@ -699,6 +705,7 @@ class MainActivity : Activity() {
             var c: Renderer? = null
             try {
                 client?.stop()
+                val pin = pinQuality(cand, headers)
                 val self = arrayOfNulls<Renderer>(1)
                 val onStatus: (CastStatus) -> Unit = { s -> main.post { if (client === self[0]) showStatus(s) } }
                 val onClosed: (String?) -> Unit = { r -> main.post { if (client === self[0] || client == null) onCastEnded(r) } }
@@ -720,7 +727,7 @@ class MainActivity : Activity() {
                 cc.connect()
                 val vpn = net.isVpnActive()
                 val order = when {
-                    cand.forceProxy -> listOf(true)
+                    pin.forceProxy -> listOf(true)
                     else -> when (mode) {
                     "direct" -> listOf(false)
                     "proxy" -> listOf(true)
@@ -730,8 +737,8 @@ class MainActivity : Activity() {
                     else listOf(false, true)
                     }
                 }
-                val fmp4 = device.type == CastDevice.TYPE_CAST && cand.kind == "hls" && detectFmp4(cand.url, headers)
-                if (cand.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
+                val fmp4 = device.type == CastDevice.TYPE_CAST && pin.kind == "hls" && detectFmp4(pin.url, headers)
+                if (pin.kind == "hls") diag("HLS con segmentos fMP4: $fmp4")
                 proxy?.lastUpstreamError = null
                 proxy?.rewriter?.sawDrm = false
                 proxy?.okLogged = 0
@@ -739,11 +746,11 @@ class MainActivity : Activity() {
                 // (muchas teles no entienden HLS por DLNA); luego los caminos normales.
                 class Attempt(val useProxy: Boolean, val tsMime: String? = null)
                 val attempts = ArrayList<Attempt>()
-                if (device.type == CastDevice.TYPE_DLNA && cand.kind == "hls") {
+                if (device.type == CastDevice.TYPE_DLNA && pin.kind == "hls") {
                     val p = ensureProxy(device)
                     if (p != null) {
                         try {
-                            p.canRelay(cand.url, headers)
+                            p.canRelay(pin.url, headers)
                             val sink = (cc as? DlnaRenderer)?.sinkMimes.orEmpty()
                             listOf("video/mp2t", "video/mpeg", "video/vnd.dlna.mpeg-tts")
                                 .filter { it in sink }
@@ -765,16 +772,16 @@ class MainActivity : Activity() {
                     val ctype: String
                     if (att.tsMime != null) {
                         val p = ensureProxy(device) ?: continue
-                        url = p.relayUrl(cand.url, headers, att.tsMime)
+                        url = p.relayUrl(pin.url, headers, att.tsMime)
                         ctype = att.tsMime
                     } else if (useProxy) {
                         val p = ensureProxy(device) ?: continue
                         p.rewriter.defaultHeaders = headers
-                        url = p.rewriter.proxify(cand.url, headers)
-                        ctype = cand.contentType
+                        url = p.rewriter.proxify(pin.url, headers)
+                        ctype = pin.contentType
                     } else {
-                        url = cand.url
-                        ctype = cand.contentType
+                        url = pin.url
+                        ctype = pin.contentType
                     }
                     val label = when {
                         att.tsMime != null -> "convertido a TS ${att.tsMime}"
@@ -785,7 +792,7 @@ class MainActivity : Activity() {
                     try {
                         // Nuestra app de TV puede usar las cookies y cabeceras del navegador al ir directa.
                         val sendHeaders = if (useProxy) emptyMap() else headers + (
-                            CookieManager.getInstance().getCookie(cand.url)?.let { mapOf("Cookie" to it) } ?: emptyMap())
+                            CookieManager.getInstance().getCookie(pin.url)?.let { mapOf("Cookie" to it) } ?: emptyMap())
                         cc.load(url, ctype, title, start, live, fmp4, sendHeaders)
                         ok = true
                         // Recordamos qué camino funciona con esta TV para probarlo primero la próxima vez.
@@ -812,7 +819,7 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 val msg = when (e) {
-                    is CastException -> if (cand.looksEncrypted || proxy?.rewriter?.sawDrm == true)
+                    is CastException -> if (pin.looksEncrypted || proxy?.rewriter?.sawDrm == true)
                         "Este vídeo está cifrado con DRM (protección anticopia). El Chromecast sólo puede reproducirlo desde la app oficial del servicio, no desde un navegador."
                     else proxy?.lastUpstreamError?.let { code ->
                         "La web del vídeo se niega a dárselo a la tele (error $code). Suele pasar cuando el enlace ha caducado o la web protege el vídeo. Recarga la página, dale al play y vuelve a intentarlo."
@@ -838,15 +845,39 @@ class MainActivity : Activity() {
     }
 
     /** Las listas HLS con segmentos fMP4 necesitan avisarse al receptor. */
+    private fun fetchHlsText(u: String, headers: Map<String, String>): String? = try {
+        val c = URL(u).openConnection() as HttpURLConnection
+        c.connectTimeout = 5000
+        c.readTimeout = 5000
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        CookieManager.getInstance().getCookie(u)?.let { c.setRequestProperty("Cookie", it) }
+        c.inputStream.use { String(it.readBytes().take(256 * 1024).toByteArray()) }
+    } catch (_: Exception) { null }
+
+    private fun hlsFixedQuality(): Boolean = prefs.getString("hlsQuality", "fixed") == "fixed"
+
+    /**
+     * Anota las calidades de una lista HLS maestra y, con la calidad "fija", la sustituye por la
+     * mejor variante (hasta 8 Mbps). Así la tele no empieza en baja calidad ni salta entre
+     * calidades, igual que ya hace el envío DLNA convertido a TS.
+     */
+    private fun pinQuality(cand: MediaCandidate, headers: Map<String, String>): MediaCandidate {
+        if (cand.kind != "hls") return cand
+        val text = fetchHlsText(cand.url, headers) ?: return cand
+        if (!Hls.isMaster(text)) { diag("HLS: lista simple (una sola calidad)"); return cand }
+        val all = Hls.variants(text, cand.url)
+        diag("HLS: ${all.size} calidades: " + all.joinToString { it.label })
+        if (!hlsFixedQuality()) { diag("HLS: calidad automática (elige la tele)"); return cand }
+        if (Regex("#EXT-X-MEDIA:[^\\n]*TYPE=(AUDIO|SUBTITLES)[^\\n]*URI=").containsMatchIn(text)) {
+            diag("HLS: el audio va aparte, no se fija la calidad"); return cand
+        }
+        val best = Hls.pickVariant(text, cand.url) ?: return cand
+        diag("HLS: calidad fijada → ${all.firstOrNull { it.url == best }?.label ?: best}")
+        return cand.copy(url = best)
+    }
+
     private fun detectFmp4(url: String, headers: Map<String, String>): Boolean {
-        fun fetch(u: String): String? = try {
-            val c = URL(u).openConnection() as HttpURLConnection
-            c.connectTimeout = 5000
-            c.readTimeout = 5000
-            headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-            CookieManager.getInstance().getCookie(u)?.let { c.setRequestProperty("Cookie", it) }
-            c.inputStream.use { String(it.readBytes().take(256 * 1024).toByteArray()) }
-        } catch (_: Exception) { null }
+        fun fetch(u: String): String? = fetchHlsText(u, headers)
 
         var text = fetch(url) ?: return false
         if (text.contains("#EXT-X-STREAM-INF")) {

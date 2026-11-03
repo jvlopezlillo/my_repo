@@ -326,7 +326,8 @@ class CastClient(
                 val state = st.optString("playerState")
                 val idle = st.optString("idleReason").let { if (it.isEmpty()) "" else " ($it)" }
                 val ext = st.optJSONObject("extendedStatus")?.optString("playerState")?.let { " / $it" } ?: ""
-                "← TV: $state$ext$idle"
+                val vi = st.optJSONObject("videoInfo")?.let { " · reproduciendo ${it.optInt("width")}x${it.optInt("height")}" } ?: ""
+                "← TV: $state$ext$idle$vi"
             }
             ns == CastNs.MEDIA || ns == CastNs.RECEIVER -> "← TV: ${json.toString().take(300)}"
             else -> return null

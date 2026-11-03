@@ -44,10 +44,12 @@ object PlayerHub {
     @Volatile var duration = 0.0
     @Volatile var error = ""
     @Volatile var title = ""
+    @Volatile var video = ""
 
     fun play(ctx: Context, req: MediaRequest) {
         state = "loading"
         error = ""
+        video = ""
         title = req.title
         position = req.position
         duration = 0.0
@@ -117,5 +119,6 @@ object PlayerHub {
             .put("volume", vol)
             .put("error", error)
             .put("title", title)
+            .put("video", video)
     }
 }

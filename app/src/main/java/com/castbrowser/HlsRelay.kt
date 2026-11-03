@@ -23,6 +23,11 @@ class HlsMedia(
 
 class HlsUnsupported(msg: String) : Exception(msg)
 
+class HlsVariant(val bandwidth: Long, val resolution: String?, val url: String) {
+    val label: String
+        get() = (resolution ?: "?") + " " + String.format(java.util.Locale.ROOT, "%.1f", bandwidth / 1_000_000.0) + " Mbps"
+}
+
 object Hls {
     private const val MAX_BANDWIDTH = 8_000_000L
 
@@ -43,19 +48,25 @@ object Hls {
         return ByteArray(16) { h.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
     }
 
-    /** La mejor variante que no pase de 8 Mbps (o la más ligera si todas pasan). */
-    fun pickVariant(text: String, base: String): String? {
+    /** Las calidades de una lista maestra, de mejor a peor. */
+    fun variants(text: String, base: String): List<HlsVariant> {
         val lines = text.lines().map { it.trim() }
-        val variants = ArrayList<Pair<Long, String>>()
+        val out = ArrayList<HlsVariant>()
         for (i in lines.indices) {
             if (!lines[i].startsWith("#EXT-X-STREAM-INF")) continue
             val bw = Regex("(?<![A-Z-])BANDWIDTH=(\\d+)").find(lines[i])?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            val res = attr(lines[i], "RESOLUTION")
             val uri = lines.drop(i + 1).firstOrNull { it.isNotEmpty() && !it.startsWith("#") } ?: continue
-            variants.add(bw to resolve(base, uri))
+            out.add(HlsVariant(bw, res, resolve(base, uri)))
         }
+        return out.sortedByDescending { it.bandwidth }
+    }
+
+    /** La mejor variante que no pase de 8 Mbps (o la más ligera si todas pasan). */
+    fun pickVariant(text: String, base: String): String? {
+        val variants = variants(text, base)
         if (variants.isEmpty()) return null
-        return variants.filter { it.first <= MAX_BANDWIDTH }.maxByOrNull { it.first }?.second
-            ?: variants.minByOrNull { it.first }?.second
+        return variants.firstOrNull { it.bandwidth <= MAX_BANDWIDTH }?.url ?: variants.last().url
     }
 
     fun parseMedia(text: String, base: String): HlsMedia {
@@ -107,8 +118,12 @@ class HlsToTs(
         var text = fetch(u).toString(Charsets.UTF_8)
         if (!text.contains("#EXTM3U")) throw HlsUnsupported("la dirección no devuelve una lista HLS")
         if (Hls.isMaster(text)) {
+            val all = Hls.variants(text, u)
             u = Hls.pickVariant(text, u) ?: throw HlsUnsupported("la lista maestra no tiene variantes")
+            log("HLS→TS: calidades ${all.joinToString { it.label }} → elegida ${all.firstOrNull { it.url == u }?.label ?: u}")
             text = fetch(u).toString(Charsets.UTF_8)
+        } else {
+            log("HLS→TS: lista simple (una sola calidad)")
         }
         val media = Hls.parseMedia(text, u)
         media.unsupported?.let { throw HlsUnsupported("el vídeo usa $it") }

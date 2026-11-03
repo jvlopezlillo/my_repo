@@ -107,6 +107,9 @@ class PlayerActivity : Activity(), PlayerControl {
             .build()
 
         p.addListener(object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0) PlayerHub.video = "${videoSize.width}x${videoSize.height}"
+            }
             override fun onPlaybackStateChanged(state: Int) = updateState()
             override fun onIsPlayingChanged(isPlaying: Boolean) = updateState()
             override fun onPlayerError(error: PlaybackException) {

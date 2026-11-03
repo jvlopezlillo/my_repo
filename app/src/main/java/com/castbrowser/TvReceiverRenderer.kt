@@ -83,8 +83,14 @@ class TvReceiverRenderer(
         if (code == 200) JSONObject(body).also { apply(it) } else null
     } catch (_: Exception) { null }
 
+    @Volatile private var lastVideo = ""
+
     private fun apply(st: JSONObject) {
         val state = st.optString("state")
+        st.optString("video").takeIf { it.isNotEmpty() && it != lastVideo }?.let {
+            lastVideo = it
+            log("TV: reproduciendo a $it")
+        }
         lastStatus = lastStatus.copy(
             playerState = when (state) {
                 "playing" -> "PLAYING"
