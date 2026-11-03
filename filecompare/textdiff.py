@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -40,7 +41,7 @@ class TextDocument:
                 encoding, text = "latin-1", data.decode("latin-1")
         eol = "\r\n" if "\r\n" in text else ("\r" if "\r" in text else "\n")
         if text == "":
-            return cls(path, [], encoding, eol, False, True)
+            return cls(path, [], encoding, eol, True, True)
         parts = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         trailing = parts[-1] == ""
         if trailing:
@@ -77,9 +78,19 @@ class Row:
     block: Optional[int]  # índice de bloque, None si es igual
 
 
-def compute_diff(a: list[str], b: list[str]) -> tuple[list[Row], list[Block]]:
-    """Devuelve filas alineadas lado a lado y la lista de bloques distintos."""
-    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+def normalize_line(s: str) -> str:
+    return " ".join(s.split())
+
+
+def compute_diff(
+    a: list[str], b: list[str], ignore_ws: bool = False
+) -> tuple[list[Row], list[Block]]:
+    """Devuelve filas alineadas lado a lado y la lista de bloques distintos.
+
+    Con `ignore_ws` las líneas que sólo difieren en espacios en blanco se consideran iguales.
+    """
+    ka, kb = ([normalize_line(x) for x in v] for v in (a, b)) if ignore_ws else (a, b)
+    sm = difflib.SequenceMatcher(None, ka, kb, autojunk=False)
     rows: list[Row] = []
     blocks: list[Block] = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
@@ -105,3 +116,34 @@ def apply_block(a: list[str], b: list[str], block: Block, direction: str) -> Non
         a[block.i1:block.i2] = b[block.j1:block.j2]
     else:
         raise ValueError(direction)
+
+
+_TOKEN = re.compile(r"\w+|\s+|[^\w\s]")
+MAX_INLINE = 4000
+
+
+def inline_spans(a: str, b: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Rangos (inicio, fin) de caracteres distintos dentro de dos líneas, por palabras."""
+    if a == b or len(a) + len(b) > MAX_INLINE:
+        return [], []
+    ta, tb = _TOKEN.findall(a), _TOKEN.findall(b)
+
+    def offsets(tokens):
+        pos, out = 0, []
+        for t in tokens:
+            out.append(pos)
+            pos += len(t)
+        out.append(pos)
+        return out
+
+    oa, ob = offsets(ta), offsets(tb)
+    sa: list[tuple[int, int]] = []
+    sb: list[tuple[int, int]] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ta, tb, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        if i2 > i1:
+            sa.append((oa[i1], oa[i2]))
+        if j2 > j1:
+            sb.append((ob[j1], ob[j2]))
+    return sa, sb

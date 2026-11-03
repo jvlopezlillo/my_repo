@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from filecompare.core import (Status, compare_dirs, copy_path, iter_nodes,
-                              parse_ignore, summarize)
+from filecompare.core import (Cancelled, Progress, Status, compare_dirs, copy_path,
+                              count_files, files_equal, iter_nodes, parse_ignore, summarize)
 from filecompare.textdiff import (BinaryFileError, TextDocument, apply_block,
-                                  compute_diff)
+                                  compute_diff, inline_spans)
 import pytest
 
 
@@ -66,16 +66,61 @@ def test_copy_file_overwrites(tmp_path):
     assert (tmp_path / "deep/er/a.txt").read_text() == "new"
 
 
-def test_copy_dir_merges_and_replaces_type(tmp_path):
+def test_copy_dir_mirrors_exactly(tmp_path):
     L, R = make(tmp_path)
+    w(R / ".git/keep", "ignorado: se conserva")
     copy_path(L, R, [".git"])
     assert (R / "diff.txt").read_text() == "abc"
     assert (R / "newdir/f.txt").exists()
-    assert (R / "only_r.txt").exists()  # lo extra en destino se conserva
+    assert not (R / "only_r.txt").exists()  # lo extra en destino se elimina
     assert (R / "mix").is_file()  # carpeta reemplazada por fichero
-    assert not (R / ".git").exists()
+    assert (R / ".git/keep").exists()  # lo ignorado ni se copia ni se borra
+    assert not (L / ".git").joinpath("keep").exists()
     s = summarize(compare_dirs(L, R, [".git"]))
-    assert s[Status.DIFFERENT] == 0 and s[Status.LEFT_ONLY] == 0
+    assert s[Status.DIFFERENT] == s[Status.LEFT_ONLY] == s[Status.RIGHT_ONLY] == 0
+
+
+def test_copy_removes_extra_subdirs(tmp_path):
+    w(tmp_path / "S/a.txt", "1")
+    w(tmp_path / "D/a.txt", "0")
+    w(tmp_path / "D/extra/deep/x.txt", "x")
+    copy_path(tmp_path / "S", tmp_path / "D")
+    assert sorted(p.name for p in (tmp_path / "D").iterdir()) == ["a.txt"]
+
+
+def test_ignore_whitespace_and_eol(tmp_path):
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    a.write_bytes(b"x = 1\nif y:\n\treturn  2\n")
+    b.write_bytes(b"x = 1\r\nif y:\r\n\treturn  2\r\n")  # sólo CRLF
+    c.write_bytes(b"x   =   1  \nif y:\n    return 2\n")  # sólo espacios
+    assert not files_equal(a, b) and not files_equal(a, c)
+    assert files_equal(a, b, ignore_eol=True) and not files_equal(a, c, ignore_eol=True)
+    assert files_equal(a, c, ignore_ws=True) and files_equal(a, b, ignore_ws=True)
+    d = tmp_path / "d"
+    d.write_bytes(b"x = 2\n")
+    assert not files_equal(a, d, ignore_ws=True)
+    # carpetas
+    w(tmp_path / "L/f.txt", "a  b\n")
+    w(tmp_path / "R/f.txt", "a b\n")
+    n = by_rel(compare_dirs(tmp_path / "L", tmp_path / "R"))
+    assert n["f.txt"].status is Status.DIFFERENT
+    n = by_rel(compare_dirs(tmp_path / "L", tmp_path / "R", ignore_ws=True))
+    assert n["f.txt"].status is Status.IDENTICAL
+
+
+def test_progress_and_cancel(tmp_path):
+    L, R = make(tmp_path)
+    seen = []
+    p = Progress(lambda d, t: seen.append((d, t)))
+    compare_dirs(L, R, [".git"], progress=p)
+    assert p.total == count_files(L, [".git"]) + count_files(R, [".git"])
+    assert p.done == p.total and seen[-1] == (p.total, p.total)
+    p = Progress()
+    p.cancel()
+    with pytest.raises(Cancelled):
+        compare_dirs(L, R, progress=p)
+    with pytest.raises(Cancelled):
+        copy_path(L, tmp_path / "X", progress=p)
 
 
 def test_textdoc_roundtrip(tmp_path):
@@ -120,3 +165,19 @@ def test_diff_blocks_and_copy():
     for blk in reversed(blocks):
         apply_block(a2, b2, blk, "rtl")
     assert a2 == b2 == b
+
+
+def test_diff_ignore_ws():
+    a, b = ["x = 1", "y"], ["x   =  1 ", "z"]
+    _, blocks = compute_diff(a, b)
+    assert len(blocks) == 1 and blocks[0].i1 == 0  # distinto sin ignorar
+    rows, blocks = compute_diff(a, b, ignore_ws=True)
+    assert len(blocks) == 1 and blocks[0].i1 == 1
+    assert rows[0].left == "x = 1" and rows[0].right == "x   =  1 "  # se muestra el original
+
+
+def test_inline_spans():
+    sa, sb = inline_spans("el gato negro", "el perro negro")
+    assert [("el gato negro")[s:e] for s, e in sa] == ["gato"]
+    assert [("el perro negro")[s:e] for s, e in sb] == ["perro"]
+    assert inline_spans("igual", "igual") == ([], [])

@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         if b:
             self.open_text(Path(a), Path(b))
 
-    def open_text(self, left: Path, right: Path):
+    def open_text(self, left: Path, right: Path, ignore_ws: bool = False):
         left, right = Path(left), Path(right)
         for i in range(self.tabs.count()):
             w = self.tabs.widget(i)
@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.critical(self, "Error al leer", str(e))
             return
-        view = TextDiffView(ldoc, rdoc)
+        view = TextDiffView(ldoc, rdoc, ignore_ws)
         name = left.name if left.name == right.name else f"{left.name} ↔ {right.name}"
         i = self._add_tab(view, name, f"{left}\n{right}")
         view.dirtyChanged.connect(lambda d, v=view, n=name: self._mark(v, n, d))
@@ -126,6 +126,8 @@ class MainWindow(QMainWindow):
     def close_tab(self, i: int):
         w = self.tabs.widget(i)
         if self._confirm_close(w):
+            if isinstance(w, FolderView):
+                w.shutdown()
             self.tabs.removeTab(i)
             w.deleteLater()
             if self.tabs.count() == 0:
@@ -138,6 +140,10 @@ class MainWindow(QMainWindow):
             if not self._confirm_close(self.tabs.widget(i)):
                 e.ignore()
                 return
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if isinstance(w, FolderView):
+                w.shutdown()
         e.accept()
 
 
