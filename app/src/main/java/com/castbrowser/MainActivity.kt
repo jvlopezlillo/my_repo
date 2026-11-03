@@ -789,6 +789,19 @@ class MainActivity : Activity() {
                         else -> "directo"
                     }
                     main.post { panelStatus.text = "Cargando ($label)…" }
+                    // Aviso si la tele no llega a pedir el vídeo al móvil (VPN, router…).
+                    val watch = if (useProxy) {
+                        val px = proxy
+                        val before = px?.requests?.get() ?: 0
+                        Thread {
+                            try { Thread.sleep(8000) } catch (_: InterruptedException) { return@Thread }
+                            if (px != null && px.requests.get() == before) {
+                                diag("⚠ A los 8 s la tele todavía no ha pedido nada al móvil (${px.baseUrl}). " +
+                                    "Si pasa siempre: la VPN del móvil o el router (aislamiento de clientes Wi-Fi) " +
+                                    "puede estar impidiendo que la tele llegue al móvil.")
+                            }
+                        }.apply { isDaemon = true; start() }
+                    } else null
                     try {
                         // Nuestra app de TV puede usar las cookies y cabeceras del navegador al ir directa.
                         val sendHeaders = if (useProxy) emptyMap() else headers + (
@@ -804,6 +817,8 @@ class MainActivity : Activity() {
                         diag("Fallo ($label): ${e.message}")
                         // Se muestra el error del primer intento (el más relevante), no el del último.
                         if (error == null) error = e
+                    } finally {
+                        watch?.interrupt()
                     }
                 }
                 if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo (el móvil no está en ninguna red local: ni Wi-Fi ni punto de acceso)")
@@ -866,7 +881,8 @@ class MainActivity : Activity() {
         val text = fetchHlsText(cand.url, headers) ?: return cand
         if (!Hls.isMaster(text)) { diag("HLS: lista simple (una sola calidad)"); return cand }
         val all = Hls.variants(text, cand.url)
-        diag("HLS: ${all.size} calidades: " + all.joinToString { it.label })
+        diag(if (all.size == 1) "HLS: una sola calidad (${all[0].label}): no hay otra a la que subir"
+            else "HLS: ${all.size} calidades: " + all.joinToString { it.label })
         if (!hlsFixedQuality()) { diag("HLS: calidad automática (elige la tele)"); return cand }
         if (Regex("#EXT-X-MEDIA:[^\\n]*TYPE=(AUDIO|SUBTITLES)[^\\n]*URI=").containsMatchIn(text)) {
             diag("HLS: el audio va aparte, no se fija la calidad"); return cand

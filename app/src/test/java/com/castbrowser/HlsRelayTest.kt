@@ -164,6 +164,7 @@ class HlsRelayTest {
             assertEquals(502, (URL(bad).openConnection() as HttpURLConnection).responseCode)
             val missing = (URL(proxy.baseUrl + "/ts/t99.ts").openConnection() as HttpURLConnection).responseCode
             assertEquals(404, missing)
+            assertTrue("conexiones: ${proxy.requests.get()}", proxy.requests.get() >= 4)
         } finally {
             proxy.close(); tv.close()
         }

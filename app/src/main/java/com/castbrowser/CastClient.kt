@@ -143,7 +143,11 @@ class CastClient(
                 if (lastState == "BUFFERING") { playing = true; return } // red lenta, pero va cargando
                 throw CastException("El Chromecast no terminó de cargar el vídeo en 60 s")
             }
-            val ev = mediaEvents.poll(left, TimeUnit.MILLISECONDS) ?: continue
+            val ev = mediaEvents.poll(minOf(left, 10_000L), TimeUnit.MILLISECONDS)
+            if (ev == null) {
+                log("Esperando a que la tele cargue el vídeo (${(60_000 - left) / 1000} s)…")
+                continue
+            }
             when (ev.optString("type")) {
                 "LOAD_FAILED", "LOAD_CANCELLED", "INVALID_REQUEST", "ERROR" -> {
                     val rid = ev.optInt("requestId", 0)

@@ -117,6 +117,9 @@ class MediaProxy(
     /** Último error HTTP (4xx/5xx) que devolvió la web del vídeo. */
     @Volatile var lastUpstreamError: Int? = null
 
+    /** Conexiones recibidas desde que arrancó el proxy (para saber si la tele llega al móvil). */
+    val requests = AtomicInteger(0)
+
     /** Peticiones correctas ya registradas (sólo apuntamos las primeras). */
     @Volatile var okLogged = 0
 
@@ -211,6 +214,7 @@ class MediaProxy(
     }
 
     private fun handle(socket: Socket) {
+        requests.incrementAndGet()
         socket.use { s ->
             val remote = s.inetAddress
             if (!(remote.isSiteLocalAddress || remote.isLoopbackAddress || remote.isLinkLocalAddress)) {
