@@ -76,6 +76,7 @@ class MainActivity : Activity() {
     private var userAgent = ""
 
     @Volatile private var client: Renderer? = null
+    @Volatile private var pushStreamer: PushStreamer? = null
     private var castDevice: CastDevice? = null
     private var proxy: MediaProxy? = null
     private var connecting = false
@@ -144,6 +145,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         client?.stop()
+        pushStreamer?.stop()
         proxy?.close()
         discovery.stop()
         net.stop()
@@ -705,6 +707,8 @@ class MainActivity : Activity() {
             var c: Renderer? = null
             try {
                 client?.stop()
+                pushStreamer?.stop()
+                pushStreamer = null
                 val pin = pinQuality(cand, headers)
                 val self = arrayOfNulls<Renderer>(1)
                 val onStatus: (CastStatus) -> Unit = { s -> main.post { if (client === self[0]) showStatus(s) } }
@@ -744,7 +748,7 @@ class MainActivity : Activity() {
                 proxy?.okLogged = 0
                 // Intentos: en una tele DLNA con HLS, primero convertir a MPEG-TS en el móvil
                 // (muchas teles no entienden HLS por DLNA); luego los caminos normales.
-                class Attempt(val useProxy: Boolean, val tsMime: String? = null)
+                class Attempt(val useProxy: Boolean, val tsMime: String? = null, val push: Boolean = false)
                 val attempts = ArrayList<Attempt>()
                 if (device.type == CastDevice.TYPE_DLNA && pin.kind == "hls") {
                     val p = ensureProxy(device)
@@ -763,6 +767,21 @@ class MainActivity : Activity() {
                     }
                 }
                 order.forEach { attempts.add(Attempt(it)) }
+                // App de la tele + HLS: el móvil puede EMPUJAR el vídeo por la conexión que él abre, sin
+                // depender de que la tele consiga conectar con el móvil (que la VPN suele impedir).
+                if (device.type == CastDevice.TYPE_TV && (cc as? TvReceiverRenderer)?.pushSupported == true &&
+                    pin.kind == "hls"
+                ) {
+                    var pushOk = false
+                    val px = ensureProxy(device)
+                    if (px != null) {
+                        try { px.canRelay(pin.url, headers); pushOk = true }
+                        catch (e: Exception) { diag("No se puede empujar el vídeo a la tele: ${e.message}") }
+                    }
+                    if (pushOk) {
+                        if (vpn) attempts.add(0, Attempt(true, push = true)) else attempts.add(Attempt(true, push = true))
+                    }
+                }
 
                 var error: Exception? = null
                 var ok = false
@@ -770,7 +789,24 @@ class MainActivity : Activity() {
                     val useProxy = att.useProxy
                     val url: String
                     val ctype: String
-                    if (att.tsMime != null) {
+                    var pusher: PushStreamer? = null
+                    if (att.push) {
+                        val p = ensureProxy(device) ?: continue
+                        val id = java.util.UUID.randomUUID().toString().substring(0, 8)
+                        try {
+                            val conv = HlsToTs({ p.fetchUpstream(it, headers) }, log = ::diag)
+                            val session = conv.open(pin.url)
+                            pusher = PushStreamer({ net.connect(device.ip, device.port, 5000) }, id, conv, session, ::diag)
+                            pusher.start()
+                        } catch (e: Exception) {
+                            diag("Fallo (empujando desde el móvil): ${e.message}")
+                            if (error == null) error = CastException("No se pudo empujar el vídeo a la tele: ${e.message}")
+                            pusher?.stop()
+                            continue
+                        }
+                        url = "http://127.0.0.1:${device.port}/live/$id.ts"
+                        ctype = "video/mp2t"
+                    } else if (att.tsMime != null) {
                         val p = ensureProxy(device) ?: continue
                         url = p.relayUrl(pin.url, headers, att.tsMime)
                         ctype = att.tsMime
@@ -784,30 +820,46 @@ class MainActivity : Activity() {
                         ctype = pin.contentType
                     }
                     val label = when {
+                        att.push -> "empujando desde el móvil"
                         att.tsMime != null -> "convertido a TS ${att.tsMime}"
                         useProxy -> "vía móvil"
                         else -> "directo"
                     }
                     main.post { panelStatus.text = "Cargando ($label)…" }
-                    // Aviso si la tele no llega a pedir el vídeo al móvil (VPN, router…).
-                    val watch = if (useProxy) {
+                    // Si la tele no llega a pedir el vídeo al móvil (VPN, router…), se corta pronto con un
+                    // mensaje claro en vez de esperar un minuto. El tiempo cuenta desde que se envía el vídeo.
+                    if (useProxy && !att.push) {
                         val px = proxy
                         val before = px?.requests?.get() ?: 0
-                        Thread {
-                            try { Thread.sleep(8000) } catch (_: InterruptedException) { return@Thread }
-                            if (px != null && px.requests.get() == before) {
-                                diag("⚠ A los 8 s la tele todavía no ha pedido nada al móvil (${px.baseUrl}). " +
-                                    "Si pasa siempre: la VPN del móvil o el router (aislamiento de clientes Wi-Fi) " +
-                                    "puede estar impidiendo que la tele llegue al móvil.")
+                        var warned = false
+                        cc.setAbortCheck { elapsed ->
+                            when {
+                                px == null || px.requests.get() != before -> null
+                                elapsed > 15_000 -> if (vpn)
+                                    "La tele no llega al móvil: en 15 s no ha pedido el vídeo. La VPN del móvil impide que la tele " +
+                                        "conecte con él (activa «Permitir LAN» en la VPN o apágala). Con la app de la tele esto no pasa."
+                                else
+                                    "La tele no llega al móvil: en 15 s no ha pedido el vídeo. Revisa que el router no tenga " +
+                                        "activado el «aislamiento de clientes Wi-Fi»."
+                                else -> {
+                                    if (elapsed > 8_000 && !warned) {
+                                        warned = true
+                                        diag("⚠ A los 8 s de enviar el vídeo la tele todavía no ha pedido nada al móvil (${px.baseUrl})")
+                                    }
+                                    null
+                                }
                             }
-                        }.apply { isDaemon = true; start() }
-                    } else null
+                        }
+                    } else {
+                        cc.setAbortCheck(null)
+                    }
                     try {
                         // Nuestra app de TV puede usar las cookies y cabeceras del navegador al ir directa.
                         val sendHeaders = if (useProxy) emptyMap() else headers + (
                             CookieManager.getInstance().getCookie(pin.url)?.let { mapOf("Cookie" to it) } ?: emptyMap())
                         cc.load(url, ctype, title, start, live, fmp4, sendHeaders)
                         ok = true
+                        if (pusher != null) pushStreamer = pusher
                         // Recordamos qué camino funciona con esta TV para probarlo primero la próxima vez.
                         if (mode == "auto" && !vpn && att.tsMime == null) {
                             prefs.edit().putBoolean("viaPhone:${device.key}", useProxy).apply()
@@ -817,8 +869,7 @@ class MainActivity : Activity() {
                         diag("Fallo ($label): ${e.message}")
                         // Se muestra el error del primer intento (el más relevante), no el del último.
                         if (error == null) error = e
-                    } finally {
-                        watch?.interrupt()
+                        pusher?.stop()
                     }
                 }
                 if (!ok) throw error ?: CastException("No se pudo iniciar el vídeo (el móvil no está en ninguna red local: ni Wi-Fi ni punto de acceso)")
@@ -954,6 +1005,8 @@ class MainActivity : Activity() {
 
     private fun onCastEnded(reason: String?) {
         client = null
+        pushStreamer?.stop()
+        pushStreamer = null
         KeepAliveService.stop(this)
         if (connecting) return
         castDevice = null

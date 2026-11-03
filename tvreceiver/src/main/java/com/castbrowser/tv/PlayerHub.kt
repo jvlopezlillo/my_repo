@@ -47,6 +47,8 @@ object PlayerHub {
     @Volatile var video = ""
 
     fun play(ctx: Context, req: MediaRequest) {
+        // Un vídeo nuevo que no es el empujado desde el móvil cierra los flujos empujados anteriores.
+        if (!req.url.contains("/live/")) PushStreams.closeAll()
         state = "loading"
         error = ""
         video = ""
@@ -72,7 +74,7 @@ object PlayerHub {
                 "play" -> p?.play()
                 "pause" -> p?.pause()
                 "seek" -> p?.seek(value ?: 0.0)
-                "stop" -> { p?.stop(); state = "idle" }
+                "stop" -> { p?.stop(); state = "idle"; PushStreams.closeAll() }
                 "volume" -> setVolume(ctx, value ?: 0.5)
             }
         }

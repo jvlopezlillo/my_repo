@@ -60,6 +60,20 @@ class ReceiverServer(
                     val i = l.indexOf(':')
                     if (i > 0) headers[l.substring(0, i).trim().lowercase()] = l.substring(i + 1).trim()
                 }
+                val method = parts[0].uppercase()
+                val path = parts[1].substringBefore('?')
+                // El móvil empuja el vídeo por esta conexión (sirve aunque la VPN impida que la tele llegue al móvil).
+                if (method == "PUSH" && path.startsWith("/push/")) {
+                    s.soTimeout = 120_000
+                    PushStreams.servePush(path.removePrefix("/push/"), input)
+                    return
+                }
+                // El reproductor de esta misma tele lee el vídeo empujado.
+                if ((method == "GET" || method == "HEAD") && path.startsWith("/live/")) {
+                    s.soTimeout = 0
+                    PushStreams.serveLive(path.removePrefix("/live/").substringBefore('.'), s.getOutputStream())
+                    return
+                }
                 val len = headers["content-length"]?.toIntOrNull() ?: 0
                 val body = ByteArray(len)
                 var read = 0
@@ -88,6 +102,12 @@ class ReceiverServer(
             path == "/info" -> 200 to JSONObject()
                 .put("app", "castbrowser-tv").put("name", name).put("id", id)
                 .put("model", android.os.Build.MODEL).put("version", BuildInfo.VERSION)
+                .put("push", true)
+                .put("dlna", JSONObject()
+                    .put("port", DlnaStatus.httpPort)
+                    .put("ssdp", DlnaStatus.ssdp)
+                    .put("searches", DlnaStatus.searches.get())
+                    .put("interfaces", DlnaStatus.interfaces))
             path == "/status" -> 200 to PlayerHub.status(ctx)
             path == "/play" && method == "POST" -> {
                 val j = JSONObject(body)
@@ -131,5 +151,5 @@ class ReceiverServer(
 }
 
 object BuildInfo {
-    const val VERSION = "1.0"
+    const val VERSION = "1.1"
 }

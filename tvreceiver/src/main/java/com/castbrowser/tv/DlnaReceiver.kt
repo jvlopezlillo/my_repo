@@ -98,14 +98,21 @@ class DlnaReceiver(context: Context, val name: String, deviceId: String) {
         } catch (_: Exception) { null }
 
         http.start()
+        DlnaStatus.httpPort = http.port
 
+        var ssdpError: String? = null
         val s = try {
             MulticastSocket(null as SocketAddress?).apply {
                 reuseAddress = true
                 bind(InetSocketAddress(Ssdp.PORT))
                 timeToLive = 4
             }
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            // Otro servicio de la tele ocupa el puerto 1900: seguimos anunciándonos, aunque no oiremos las búsquedas.
+            ssdpError = "no se pudo abrir el puerto 1900 (${e.message})"
+            try { MulticastSocket().apply { timeToLive = 4 } } catch (_: Exception) { null }
+        }
+        DlnaStatus.ssdp = ssdpError ?: if (s != null) "ok" else "sin socket"
         socket = s
         if (s != null) {
             joinAll(s)
@@ -142,9 +149,13 @@ class DlnaReceiver(context: Context, val name: String, deviceId: String) {
 
     private fun joinAll(s: MulticastSocket) {
         val group = InetSocketAddress(InetAddress.getByName(Ssdp.GROUP), Ssdp.PORT)
+        val names = ArrayList<String>()
         for (ni in interfaces()) {
             try { s.joinGroup(group, ni) } catch (_: Exception) { /* ya unido */ }
+            val ip = ni.interfaceAddresses.map { it.address }.filterIsInstance<Inet4Address>().firstOrNull()?.hostAddress
+            names.add("${ni.name} $ip")
         }
+        DlnaStatus.interfaces = names.joinToString(", ")
     }
 
     /** IP de la tele que ve ese cliente (la de su misma red). */
@@ -166,6 +177,7 @@ class DlnaReceiver(context: Context, val name: String, deviceId: String) {
                 val p = DatagramPacket(buf, buf.size)
                 s.receive(p)
                 val st = Ssdp.searchTarget(String(p.data, 0, p.length, Charsets.ISO_8859_1)) ?: continue
+                DlnaStatus.searches.incrementAndGet()
                 val local = localAddressFor(p.address) ?: continue
                 val location = "http://$local:${http.port}/dlna/desc.xml"
                 for (t in Ssdp.matching(st, uuid)) {

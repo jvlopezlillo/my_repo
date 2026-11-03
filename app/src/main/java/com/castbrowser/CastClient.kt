@@ -39,7 +39,11 @@ class CastClient(
     private val onStatus: (CastStatus) -> Unit,
     private val onClosed: (String?) -> Unit,
     private val log: (String) -> Unit = {},
+    private val loadTimeoutMs: Long = 60_000,
 ) : Renderer {
+    @Volatile private var abortCheck: ((Long) -> String?)? = null
+    override fun setAbortCheck(check: ((Long) -> String?)?) { abortCheck = check }
+
     companion object {
         const val DEFAULT_MEDIA_RECEIVER = "CC1AD845"
         private const val SENDER = "sender-0"
@@ -135,17 +139,25 @@ class CastClient(
 
         // La primera respuesta suele ser un estado intermedio ("LOADING"): esperamos
         // hasta que el vídeo arranque de verdad o el receptor diga que ha fallado.
-        val deadline = System.currentTimeMillis() + 60_000
+        val sentAt = System.currentTimeMillis()
+        val deadline = sentAt + loadTimeoutMs
         var lastState = ""
+        var lastWaitLog = -1L
         while (true) {
-            val left = deadline - System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            val left = deadline - now
             if (left <= 0) {
-                if (lastState == "BUFFERING") { playing = true; return } // red lenta, pero va cargando
-                throw CastException("El Chromecast no terminó de cargar el vídeo en 60 s")
+                // Sólo es éxito si la tele ha avanzado de verdad; "cargando" sin progreso es un fallo.
+                if (lastState == "BUFFERING" && lastStatus.currentTime > 0) { playing = true; return }
+                throw CastException("El Chromecast no terminó de cargar el vídeo en ${loadTimeoutMs / 1000} s")
             }
-            val ev = mediaEvents.poll(minOf(left, 10_000L), TimeUnit.MILLISECONDS)
+            abortCheck?.invoke(now - sentAt)?.let { throw CastException(it) }
+            val ev = mediaEvents.poll(minOf(left, 1000L), TimeUnit.MILLISECONDS)
             if (ev == null) {
-                log("Esperando a que la tele cargue el vídeo (${(60_000 - left) / 1000} s)…")
+                if (lastWaitLog < 0 || now - lastWaitLog >= 10_000) {
+                    lastWaitLog = now
+                    log("Esperando a que la tele cargue el vídeo (${(now - sentAt) / 1000} s)…")
+                }
                 continue
             }
             when (ev.optString("type")) {

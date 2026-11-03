@@ -30,6 +30,12 @@ interface Renderer {
 
     /** Detiene la reproducción y cierra la conexión. */
     fun stop()
+
+    /**
+     * Comprobación que se consulta mientras se espera a que el vídeo arranque (con los ms
+     * transcurridos desde que se envió); si devuelve un texto, el envío se cancela con ese error.
+     */
+    fun setAbortCheck(check: ((elapsedMs: Long) -> String?)?) {}
 }
 
 /** Abre una conexión HTTP (en Android, atada a la Wi-Fi para saltar la VPN). */

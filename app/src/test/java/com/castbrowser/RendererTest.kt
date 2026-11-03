@@ -178,7 +178,8 @@ class RendererTest {
         val controls = CopyOnWriteArrayList<String>()
         val tv = FakeHttp { method, path, _, body ->
             when {
-                path == "/info" -> Triple(200, "application/json", """{"app":"castbrowser-tv","name":"MIBOX3","version":"1"}""")
+                path == "/info" -> Triple(200, "application/json",
+                    """{"app":"castbrowser-tv","name":"MIBOX3","version":"1","push":true,"dlna":{"port":49152,"ssdp":"ok","searches":3,"interfaces":"wlan0 192.168.1.35"}}""")
                 path == "/play" && method == "POST" -> {
                     played = JSONObject(body); state = "loading"
                     Thread { Thread.sleep(1000); state = "playing" }.start()
@@ -204,9 +205,53 @@ class RendererTest {
             assertEquals("PLAYING", r.lastStatus.playerState)
             assertEquals(100.0, r.lastStatus.duration, 0.01)
             assertTrue(logs.toString(), logs.any { it.contains("reproduciendo a 1920x1080") })
+            assertTrue(r.pushSupported)
+            assertTrue(logs.toString(), logs.any { it.contains("DLNA puerto 49152") && it.contains("SSDP ok") })
             r.stop()
             assertTrue(closed)
             assertTrue(controls.contains("stop"))
+        } finally {
+            tv.close()
+        }
+    }
+
+    @Test
+    fun tvAppLoadingWithoutProgressIsAFailure() {
+        val tv = FakeHttp { m, path, _, _ ->
+            when (path) {
+                "/info" -> Triple(200, "application/json", """{"app":"castbrowser-tv","name":"TV","version":"1"}""")
+                "/play" -> Triple(200, "application/json", "{}")
+                "/status" -> Triple(200, "application/json", """{"state":"buffering","position":0,"duration":0,"volume":0.5}""")
+                else -> Triple(404, "text/plain", "")
+            }
+        }
+        try {
+            val r = TvReceiverRenderer("127.0.0.1", URL(tv.base).port, opener, {}, {}, loadTimeoutMs = 1500)
+            r.connect()
+            val msg = try { r.load("http://x/v.ts", "video/mp2t", "t", 0.0, false, false, emptyMap()); "" }
+            catch (e: CastException) { e.message.orEmpty() }
+            assertTrue(msg, msg.contains("no empezó a reproducir") && msg.contains("buffering"))
+        } finally {
+            tv.close()
+        }
+    }
+
+    @Test
+    fun tvAppAbortCheckCutsTheWait() {
+        val tv = FakeHttp { _, path, _, _ ->
+            when (path) {
+                "/info" -> Triple(200, "application/json", """{"app":"castbrowser-tv","name":"TV","version":"1"}""")
+                "/play" -> Triple(200, "application/json", "{}")
+                else -> Triple(200, "application/json", """{"state":"buffering","position":0}""")
+            }
+        }
+        try {
+            val r = TvReceiverRenderer("127.0.0.1", URL(tv.base).port, opener, {}, {}, loadTimeoutMs = 30_000)
+            r.connect()
+            r.setAbortCheck { if (it > 1500) "sin conexión con el móvil" else null }
+            val msg = try { r.load("http://x/v.ts", "video/mp2t", "t", 0.0, false, false, emptyMap()); "" }
+            catch (e: CastException) { e.message.orEmpty() }
+            assertEquals("sin conexión con el móvil", msg)
         } finally {
             tv.close()
         }

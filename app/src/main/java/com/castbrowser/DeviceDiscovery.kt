@@ -121,11 +121,12 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
                     io.submit { checkRemembered() },
                 )
                 tasks.forEach { try { it.get(8, TimeUnit.SECONDS) } catch (_: Exception) {} }
+                probeTvDlna()
                 // Con punto de acceso suele haber pocos aparatos y el multicast falla más: escaneamos.
                 val hotspots = net.localLinks().filter { it.hotspot }
                 val hotspotEmpty = hotspots.isNotEmpty() &&
                     availableDevices().none { d -> hotspots.any { it.contains(d.ip) } }
-                if (forceSubnetScan || availableDevices().isEmpty() || hotspotEmpty) subnetScan()
+                if (forceSubnetScan || availableDevices().isEmpty() || hotspotEmpty) { subnetScan(); probeTvDlna() }
                 if (nsdListener == null) main.post { startNsd() }
             } finally {
                 try { lock?.release() } catch (_: Exception) {}
@@ -285,6 +286,26 @@ class DeviceDiscovery(private val context: Context, private val net: NetworkHelp
             sockets.forEach { try { it.close() } catch (_: Exception) {} }
         }
         locations.forEach { loc -> io.execute { describeDlna(loc, "wifi") } }
+    }
+
+    /**
+     * Nuestra app de la tele sabe en qué puerto sirve su DLNA: se lo preguntamos por HTTP y así
+     * aparece en la lista aunque el multicast (SSDP) no llegue.
+     */
+    private fun probeTvDlna() {
+        for (tv in devices.values.filter { it.type == CastDevice.TYPE_TV && it.available }) {
+            io.execute {
+                try {
+                    val c = net.openLocal("http://${tv.ip}:${tv.port}/info") as java.net.HttpURLConnection
+                    c.connectTimeout = 1500
+                    c.readTimeout = 2000
+                    val o = JSONObject(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+                    val port = o.optJSONObject("dlna")?.optInt("port") ?: 0
+                    if (port > 0) describeDlna("http://${tv.ip}:$port/dlna/desc.xml", "tv")
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     private fun describeDlna(location: String, via: String): CastDevice? = try {

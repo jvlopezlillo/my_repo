@@ -75,7 +75,9 @@ class MainActivity : Activity() {
         info.text = "$status\n\n" +
             "Nombre: ${ReceiverService.deviceName(this)}\n" +
             "Dirección: $ip:${ReceiverService.port}\n" +
-            (ReceiverService.dlnaName?.let { "DLNA: ✅ visible como \"$it\"\n" } ?: "DLNA: ⏳ arrancando…\n") +
+            (ReceiverService.dlnaName?.let { "DLNA: \"$it\" · puerto ${DlnaStatus.httpPort}\n" } ?: "DLNA: ⏳ arrancando…\n") +
+            "SSDP: ${DlnaStatus.ssdp} · búsquedas recibidas: ${DlnaStatus.searches.get()}\n" +
+            "Redes: ${DlnaStatus.interfaces.ifEmpty { "—" }}\n" +
             "\n" +
             "En el móvil, abre CastBrowser, reproduce un vídeo y pulsa el botón de enviar.\n" +
             "Esta TV aparecerá como \"App CastBrowser TV\".\n" +

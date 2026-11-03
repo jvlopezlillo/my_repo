@@ -18,6 +18,13 @@ Navegador mínimo cuyo único objetivo es enviar al Chromecast el vídeo que est
   encender la TV. En Android 10+ conviene darle el permiso "mostrar sobre otras apps" desde su
   pantalla, para que el vídeo se abra solo.
 
+### Con VPN y la app de la tele: el móvil "empuja" el vídeo
+Con la VPN puesta, Android suele impedir que la tele conecte *con* el móvil (así fallan Chromecast y
+DLNA, que necesitan pedirle el vídeo al móvil), pero el móvil sí puede conectar *con* la tele. Con la app
+de la tele, el móvil baja el vídeo HLS (por la VPN, con sus cookies), lo convierte a MPEG-TS y se lo envía
+por la conexión que él abre; la tele lo reproduce desde su propio puerto local. Se usa solo, sin
+configurar nada, y para Chromecast/DLNA hay que permitir la red local (LAN) en la VPN.
+
 ### Receptor DLNA en la tele (CastBrowser TV)
 La app de la tele (Mi Box, Fire TV Stick…) también es un **receptor DLNA**: aparece en la red como
 "<nombre de la tele> (DLNA)" y acepta vídeos de cualquier app DLNA (BubbleUPnP, Web Video Caster,

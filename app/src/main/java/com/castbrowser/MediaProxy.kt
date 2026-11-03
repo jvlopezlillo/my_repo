@@ -144,6 +144,9 @@ class MediaProxy(
         }
     }
 
+    /** Descarga una dirección desde el móvil (por la VPN si está puesta) con las cookies del navegador. */
+    fun fetchUpstream(url: String, headers: Map<String, String>): ByteArray = fetchBytes(url, headers)
+
     /** Comprueba que la lista HLS se puede convertir a MPEG-TS; lanza [HlsUnsupported] o IOException si no. */
     fun canRelay(playlistUrl: String, headers: Map<String, String>) {
         HlsToTs({ fetchBytes(it, headers) }, log = log).open(playlistUrl)

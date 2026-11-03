@@ -19,20 +19,32 @@ class TvReceiverRenderer(
     private val onStatus: (CastStatus) -> Unit,
     private val onClosed: (String?) -> Unit,
     private val log: (String) -> Unit = {},
+    private val loadTimeoutMs: Long = 60_000,
 ) : Renderer {
     companion object {
         const val DEFAULT_PORT = 8765
     }
 
+    @Volatile private var abortCheck: ((Long) -> String?)? = null
+    override fun setAbortCheck(check: ((Long) -> String?)?) { abortCheck = check }
+
     @Volatile override var lastStatus = CastStatus(); private set
     @Volatile private var closed = false
+
+    /** La app de la tele admite que el móvil le empuje el vídeo. */
+    @Volatile var pushSupported = false; private set
 
     private val base get() = "http://$host:$port"
 
     override fun connect() {
         val (code, body) = Http.request(open, "$base/info", timeoutMs = 4000)
         if (code != 200) throw CastException("La app receptora de la TV no responde (HTTP $code)")
-        log("TV: ${JSONObject(body).optString("name")} v${JSONObject(body).optString("version")}")
+        val info = JSONObject(body)
+        log("TV: ${info.optString("name")} v${info.optString("version")}")
+        info.optJSONObject("dlna")?.let {
+            log("TV: DLNA puerto ${it.optInt("port")} · SSDP ${it.optString("ssdp")} · búsquedas recibidas ${it.optInt("searches")} · redes ${it.optString("interfaces")}")
+        }
+        pushSupported = info.optBoolean("push")
     }
 
     override fun load(
@@ -56,10 +68,12 @@ class TvReceiverRenderer(
             mapOf("Content-Type" to "application/json"), timeoutMs = 8000)
         if (code != 200) throw CastException("La app receptora rechazó el vídeo (HTTP $code ${body.take(100)})")
 
-        val deadline = System.currentTimeMillis() + 60_000
+        val sentAt = System.currentTimeMillis()
+        val deadline = sentAt + loadTimeoutMs
         var last = ""
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(800)
+            abortCheck?.invoke(System.currentTimeMillis() - sentAt)?.let { throw CastException(it) }
             val st = fetchStatus() ?: continue
             val state = st.optString("state")
             if (state != last) { log("TV: estado $state"); last = state }
@@ -71,11 +85,12 @@ class TvReceiverRenderer(
                 "error" -> throw CastException("La TV no pudo reproducir el vídeo: ${st.optString("error")}")
             }
         }
-        if (last == "buffering" || last == "loading") {
+        // "Cargando" sin avance no es éxito: así se prueba el siguiente camino en vez de esperar para nada.
+        if (last == "buffering" && lastStatus.currentTime > 0) {
             Thread(::pollLoop, "tv-poll").apply { isDaemon = true }.start()
             return
         }
-        throw CastException("La TV no empezó a reproducir en 60 s")
+        throw CastException("La TV no empezó a reproducir en ${loadTimeoutMs / 1000} s (estado: ${last.ifEmpty { "sin respuesta" }})")
     }
 
     private fun fetchStatus(): JSONObject? = try {

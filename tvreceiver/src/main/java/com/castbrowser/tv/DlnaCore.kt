@@ -732,3 +732,14 @@ class SimpleHttpServer(
         }
     }
 }
+
+/** Estado del receptor DLNA para mostrarlo en la tele y en el diagnóstico del móvil. */
+object DlnaStatus {
+    @Volatile var httpPort = 0
+    @Volatile var ssdp = "no iniciado"
+    @Volatile var interfaces = ""
+    @Volatile var announced = 0
+
+    /** Búsquedas (M-SEARCH) recibidas de otros aparatos. */
+    val searches = java.util.concurrent.atomic.AtomicInteger(0)
+}

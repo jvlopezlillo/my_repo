@@ -98,6 +98,7 @@ class PlayerActivity : Activity(), PlayerControl {
         val mime = when {
             req.contentType.contains("mpegurl", true) -> MimeTypes.APPLICATION_M3U8
             req.contentType.contains("dash", true) -> MimeTypes.APPLICATION_MPD
+            req.contentType.contains("mp2t", true) -> MimeTypes.VIDEO_MP2T
             else -> null
         }
         val item = MediaItem.Builder()
