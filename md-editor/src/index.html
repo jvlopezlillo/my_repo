@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data: file: blob:; font-src 'self'" />
+  <title>MD Editor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">MD&nbsp;Editor</div>
+    <div class="file-actions">
+      <button data-file="new" title="Nuevo (Ctrl+N)">Nuevo</button>
+      <button data-file="open" title="Abrir (Ctrl+O)">Abrir</button>
+      <button data-file="save" title="Guardar (Ctrl+S)">Guardar</button>
+      <button data-file="saveas" title="Guardar como (Ctrl+Mayús+S)">Guardar como</button>
+      <button data-file="html" title="Exportar a HTML">Exportar HTML</button>
+    </div>
+    <div class="spacer"></div>
+    <span id="filename" class="filename">Sin título</span>
+    <button id="theme" class="icon-btn" title="Cambiar tema claro / oscuro" aria-label="Cambiar tema">
+      <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </header>
+
+  <main id="split">
+    <section class="pane" id="editor-pane">
+      <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formato">
+        <button data-act="bold" title="Negrita (Ctrl+B)"><svg viewBox="0 0 24 24"><path d="M6 4h8a4 4 0 0 1 0 8H6zM6 12h9a4 4 0 0 1 0 8H6z"/></svg></button>
+        <button data-act="italic" title="Cursiva (Ctrl+I)"><svg viewBox="0 0 24 24"><path d="M19 4h-9M14 20H5M15 4 9 20"/></svg></button>
+        <button data-act="strike" title="Tachado"><svg viewBox="0 0 24 24"><path d="M16 4H9a3 3 0 0 0-2.8 4M14 12a4 4 0 0 1 0 8H6M4 12h16"/></svg></button>
+        <span class="sep"></span>
+        <button data-act="h1" title="Título 1"><b>H1</b></button>
+        <button data-act="h2" title="Título 2"><b>H2</b></button>
+        <button data-act="h3" title="Título 3"><b>H3</b></button>
+        <span class="sep"></span>
+        <button data-act="ul" title="Lista con viñetas"><svg viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+        <button data-act="ol" title="Lista numerada"><svg viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+        <button data-act="task" title="Lista de tareas"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4M13 6h8M13 18h8"/></svg></button>
+        <span class="sep"></span>
+        <button data-act="quote" title="Cita"><svg viewBox="0 0 24 24"><path d="M3 21c3 0 7-1 7-8V5H4v7h4M14 21c3 0 7-1 7-8V5h-6v7h4"/></svg></button>
+        <button data-act="code" title="Código en línea"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></button>
+        <button data-act="codeblock" title="Bloque de código"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 9-3 3 3 3M14 9l3 3-3 3"/></svg></button>
+        <span class="sep"></span>
+        <button data-act="link" title="Enlace (Ctrl+K)"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></button>
+        <button data-act="image" title="Insertar imagen"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.5-4.5L5 21"/></svg></button>
+        <button data-act="table" title="Insertar tabla"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16M15 4v16"/></svg></button>
+        <button data-act="hr" title="Línea horizontal"><svg viewBox="0 0 24 24"><path d="M3 12h18"/></svg></button>
+      </div>
+      <textarea id="editor" spellcheck="false" placeholder="Escribe aquí tu Markdown…"></textarea>
+    </section>
+
+    <div class="divider" id="divider" role="separator" aria-orientation="vertical"></div>
+
+    <section class="pane" id="preview-pane">
+      <div class="pane-title">Vista previa</div>
+      <article id="preview" class="markdown-body"></article>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="stats"></span>
+    <span id="cursor"></span>
+  </footer>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel">Cancelar</button>
+        <button id="modal-ok" class="primary">Insertar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/marked.umd.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

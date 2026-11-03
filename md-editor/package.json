@@ -1,0 +1,36 @@
+{
+  "name": "md-editor",
+  "version": "1.0.0",
+  "description": "Editor Markdown con vista previa en vivo",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.example.mdeditor",
+    "productName": "MD Editor",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  },
+  "dependencies": {
+    "dompurify": "^3.2.0",
+    "marked": "^14.1.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}
