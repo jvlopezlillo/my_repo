@@ -50,7 +50,22 @@ internal object Http {
         headers: Map<String, String> = emptyMap(),
         timeoutMs: Int = 5000,
     ): Pair<Int, String> {
-        val c = open(url)
+        return try {
+            exchange(open(url), method, body, headers, timeoutMs)
+        } catch (e: java.net.SocketException) {
+            // La VPN no deja atar la conexión a la Wi-Fi (EPERM): se repite como conexión normal.
+            if (e.message?.contains("EPERM") != true) throw e
+            exchange(java.net.URL(url).openConnection() as HttpURLConnection, method, body, headers, timeoutMs)
+        }
+    }
+
+    private fun exchange(
+        c: HttpURLConnection,
+        method: String,
+        body: String?,
+        headers: Map<String, String>,
+        timeoutMs: Int,
+    ): Pair<Int, String> {
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
         c.requestMethod = method

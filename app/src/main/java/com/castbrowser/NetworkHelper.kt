@@ -67,28 +67,35 @@ class NetworkHelper(context: Context) {
      * Si la VPN no permite atar sockets a la Wi-Fi (EPERM), lo recordamos y usamos
      * conexiones normales (funcionan si la VPN deja pasar la red local).
      */
-    @Volatile private var bindingAllowed: Boolean? = null
+    @Volatile private var bindingAllowed = false
+    @Volatile private var bindCheckedAt = 0L
 
+    /**
+     * ¿Nos deja Android atar sockets a la Wi-Fi? Cambia al activar o desactivar la VPN, así que
+     * se vuelve a comprobar a menudo (la comprobación es instantánea) en vez de recordarla para siempre.
+     */
     private fun canBind(net: Network): Boolean {
-        bindingAllowed?.let { return it }
+        val now = System.currentTimeMillis()
+        if (now - bindCheckedAt < 1500) return bindingAllowed
         val ok = try {
             DatagramSocket().use { net.bindSocket(it) }
             true
         } catch (_: Exception) { false }
         bindingAllowed = ok
+        bindCheckedAt = now
         return ok
     }
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             localNetwork = network
-            bindingAllowed = null
+            bindCheckedAt = 0L
             onChanged?.invoke()
         }
 
         override fun onLost(network: Network) {
             if (localNetwork == network) localNetwork = null
-            bindingAllowed = null
+            bindCheckedAt = 0L
             onChanged?.invoke()
         }
 

@@ -256,4 +256,38 @@ class RendererTest {
             tv.close()
         }
     }
+
+    /** Conexión que falla como cuando la VPN no deja atar el socket a la Wi-Fi. */
+    private class EpermConnection(u: URL) : HttpURLConnection(u) {
+        private fun fail(): Nothing = throw java.net.SocketException("Binding socket to network 205 failed: EPERM (Operation not permitted)")
+        override fun connect() = fail()
+        override fun getOutputStream(): java.io.OutputStream = fail()
+        override fun getInputStream(): java.io.InputStream = fail()
+        override fun getResponseCode(): Int = fail()
+        override fun disconnect() {}
+        override fun usingProxy() = false
+    }
+
+    @Test
+    fun httpRetriesAsPlainConnectionWhenBindingIsForbidden() {
+        val tv = FakeHttp { _, path, _, body ->
+            Triple(200, "application/json", """{"path":"$path","echo":"${body.length}"}""")
+        }
+        try {
+            val eperm: HttpOpener = { u -> EpermConnection(URL(u)) }
+            val (code, text) = Http.request(eperm, "${tv.base}/info", timeoutMs = 2000)
+            assertEquals(200, code)
+            assertTrue(text, text.contains("/info"))
+            // también con cuerpo (POST)
+            val (c2, t2) = Http.request(eperm, "${tv.base}/play", "POST", "{\"a\":1}", timeoutMs = 2000)
+            assertEquals(200, c2)
+            assertTrue(t2, t2.contains("\"echo\":\"7\""))
+            // otros errores de red no se tapan
+            val other: HttpOpener = { _ -> throw java.net.SocketException("Connection refused") }
+            val msg = try { Http.request(other, "${tv.base}/x"); "" } catch (e: java.net.SocketException) { e.message.orEmpty() }
+            assertEquals("Connection refused", msg)
+        } finally {
+            tv.close()
+        }
+    }
 }
