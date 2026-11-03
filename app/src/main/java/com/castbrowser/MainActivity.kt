@@ -819,7 +819,7 @@ class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 val msg = when (e) {
-                    is CastException -> if (pin.looksEncrypted || proxy?.rewriter?.sawDrm == true)
+                    is CastException -> if (cand.looksEncrypted || proxy?.rewriter?.sawDrm == true)
                         "Este vídeo está cifrado con DRM (protección anticopia). El Chromecast sólo puede reproducirlo desde la app oficial del servicio, no desde un navegador."
                     else proxy?.lastUpstreamError?.let { code ->
                         "La web del vídeo se niega a dárselo a la tele (error $code). Suele pasar cuando el enlace ha caducado o la web protege el vídeo. Recarga la página, dale al play y vuelve a intentarlo."
