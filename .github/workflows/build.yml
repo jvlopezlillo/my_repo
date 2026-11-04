@@ -15,12 +15,9 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
 
-  package:
+  package-windows:
     needs: test
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,5 +26,58 @@ jobs:
       - run: pyinstaller --noconfirm --onefile --windowed --name FileCompare main.py
       - uses: actions/upload-artifact@v4
         with:
-          name: FileCompare-${{ matrix.os }}
+          name: FileCompare-windows
           path: dist/*
+
+  # Se compila en Debian 11 (glibc 2.31) para que el ejecutable funcione también en
+  # distribuciones antiguas (Debian 11+, Ubuntu 20.04+...). Compilar en una distro nueva
+  # ata el binario a su glibc ("GLIBC_2.38 not found").
+  package-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    container: python:3.12-bullseye
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias del sistema (PyInstaller las incluye en el ejecutable)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends binutils libgl1 libegl1 libglib2.0-0 \
+            libfontconfig1 libdbus-1-3 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcb-xfixes0
+      - run: pip install -r requirements-dev.txt
+      - run: pyinstaller --noconfirm --onefile --name FileCompare main.py
+      - name: glibc máxima exigida por el ejecutable
+        run: ldd --version | head -1; objdump -T dist/FileCompare | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FileCompare-linux
+          path: dist/FileCompare
+
+  # Prueba de humo: el ejecutable debe arrancar en distribuciones distintas a la de compilación.
+  smoke-linux:
+    needs: package-linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:11", "debian:12", "ubuntu:22.04", "ubuntu:24.04"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: FileCompare-linux
+          path: app
+      - name: Ejecutar en ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD/app:/app" -e DEBIAN_FRONTEND=noninteractive \
+            -e QT_QPA_PLATFORM=offscreen ${{ matrix.image }} bash -c '
+              set -u
+              apt-get update -qq >/dev/null
+              apt-get install -y -qq libgl1 libegl1 libfontconfig1 libdbus-1-3 libxkbcommon0 libglib2.0-0 >/dev/null
+              chmod +x /app/FileCompare
+              echo "glibc: $(ldd --version | head -1)"
+              out=$(/app/FileCompare un-argumento 2>&1); code=$?
+              echo "$out"; echo "código de salida: $code"
+              # sin dos argumentos la app muestra el uso y sale con 2, tras cargar Python y Qt
+              [ "$code" -eq 2 ] && echo "$out" | grep -q "^Uso:"
+            '
