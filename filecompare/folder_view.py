@@ -29,7 +29,7 @@ STATUS_COLOR = {
     Status.RIGHT_ONLY: QColor(70, 175, 95, 60),
     Status.TYPE_MISMATCH: QColor(225, 80, 80, 70),
 }
-COL_NAME, COL_LEFT, COL_ACT, COL_RIGHT, COL_STATUS = range(5)
+COL_LNAME, COL_LEFT, COL_ACT, COL_RNAME, COL_RIGHT, COL_STATUS = range(6)
 NODE_ROLE = Qt.UserRole
 
 
@@ -107,11 +107,12 @@ class FolderView(QWidget):
                          self.eol_chk, self.confirm, self.go]
 
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels(["Nombre", "Izquierda", "Copiar", "Derecha", "Estado"])
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(["Izquierda", "Tamaño / fecha", "Copiar", "Derecha", "Tamaño / fecha", "Estado"])
         self.tree.setUniformRowHeights(True)
         h = self.tree.header()
-        h.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
+        for c in (COL_LNAME, COL_RNAME):
+            h.setSectionResizeMode(c, QHeaderView.Stretch)
         for c in (COL_LEFT, COL_RIGHT):
             h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         h.setSectionResizeMode(COL_ACT, QHeaderView.Fixed)
@@ -241,14 +242,18 @@ class FolderView(QWidget):
         def add(parent, node: DiffNode):
             it = QTreeWidgetItem(parent)
             it.setData(0, NODE_ROLE, node)
-            it.setText(COL_NAME, node.name)
-            it.setIcon(COL_NAME, dir_icon if node.is_dir else file_icon)
+            # cada lado en su columna; si no existe, se deja vacío en la misma fila
+            for path, kind, col in ((node.left, node.left_kind, COL_LNAME),
+                                    (node.right, node.right_kind, COL_RNAME)):
+                if path is not None:
+                    it.setText(col, node.name)
+                    it.setIcon(col, dir_icon if kind == "dir" else file_icon)
             it.setText(COL_LEFT, _info(node.left, node.left_kind))
             it.setText(COL_RIGHT, _info(node.right, node.right_kind))
             it.setText(COL_STATUS, STATUS_TEXT[node.status])
             color = STATUS_COLOR.get(node.status)
             if color:
-                for c in range(5):
+                for c in range(6):
                     it.setBackground(c, QBrush(color))
             if node.status is not Status.IDENTICAL:
                 self.tree.setItemWidget(it, COL_ACT, self._arrows(node))
