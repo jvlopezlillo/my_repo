@@ -16,11 +16,14 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
 ### Comparación de carpetas
 - Recorre recursivamente ambas carpetas y compara el **contenido** byte a byte, en un hilo aparte
   con **barra de progreso y botón Cancelar** (también al copiar).
-- Estados: idéntico, diferente (naranja), sólo izquierda (azul), sólo derecha (verde), tipo distinto (rojo).
+- Cada fila muestra a la izquierda y a la derecha su propio nombre; el lado que no existe queda vacío en la misma fila
+  (subcarpetas primero, luego ficheros). Colores: idéntico (verde), diferente (naranja), tipo distinto (rojo); lo que
+  está solo en un lado se deja en blanco.
 - Flechas **→ / ←** en cada fila copian el fichero o carpeta completo al otro lado, machacando el destino
   (pide confirmación; se puede desactivar). Al copiar una **carpeta, el destino queda idéntico al origen**:
   se sobrescribe lo distinto, se añade lo que falta y **se elimina lo que sobra** (la confirmación indica cuántos
   ficheros se borrarán). Lo que coincida con los patrones de «Ignorar» ni se copia ni se borra.
+- Botones **✕** en cada lado eliminan el fichero o la carpeta de ese lado (siempre piden confirmación; es definitivo).
 - **Doble clic** en un fichero lo abre en una pestaña con los dos lados, izquierda y derecha.
 - Opciones: «Ignorar espacios» (espacios/tabuladores y fin de línea), «Ignorar fin de línea» (LF = CRLF),
   «Sólo diferencias» y patrones a ignorar (por defecto `.git, __pycache__`).
@@ -32,7 +35,7 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
 - Al dejar de teclear se recalcula la comparación. En el canal central, cada bloque tiene flechas **→ / ←**
   para copiarlo en cualquier sentido.
 - Deshacer/Rehacer (Ctrl+Z / Ctrl+Y), siguiente/anterior diferencia (F8 / Shift+F8), «Ignorar espacios»
-  y guardado independiente de cada lado.
+  y guardado independiente de cada lado (**Ctrl+1** izquierda, **Ctrl+2** derecha).
 - Se conservan codificación (UTF-8, UTF-8 con BOM, UTF-16, Latin-1), saltos de línea (LF/CRLF) y el salto final.
 - Los ficheros binarios se detectan y no se muestran.
 

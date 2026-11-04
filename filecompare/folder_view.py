@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QHeaderView,
                                QLineEdit, QMessageBox, QProgressBar, QPushButton, QStyle,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .core import (DiffNode, Progress, Status, compare_dirs, copy_path, count_files, iter_nodes,
-                   parse_ignore, path_under, summarize)
+from .core import (DiffNode, Progress, Status, compare_dirs, copy_path, count_files, delete_path,
+                   iter_nodes, parse_ignore, path_under, summarize)
 from .worker import Worker
 
 STATUS_TEXT = {
@@ -25,8 +25,7 @@ STATUS_TEXT = {
 }
 STATUS_COLOR = {
     Status.DIFFERENT: QColor(235, 170, 40, 70),
-    Status.LEFT_ONLY: QColor(70, 130, 220, 60),
-    Status.RIGHT_ONLY: QColor(70, 175, 95, 60),
+    Status.IDENTICAL: QColor(70, 175, 95, 60),  # coincide en ambas carpetas
     Status.TYPE_MISMATCH: QColor(225, 80, 80, 70),
 }
 COL_LNAME, COL_LEFT, COL_ACT, COL_RNAME, COL_RIGHT, COL_STATUS = range(6)
@@ -116,7 +115,7 @@ class FolderView(QWidget):
         for c in (COL_LEFT, COL_RIGHT):
             h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         h.setSectionResizeMode(COL_ACT, QHeaderView.Fixed)
-        self.tree.setColumnWidth(COL_ACT, 80)
+        self.tree.setColumnWidth(COL_ACT, 130)
         h.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeToContents)
         self.tree.itemDoubleClicked.connect(self._double_click)
 
@@ -255,8 +254,7 @@ class FolderView(QWidget):
             if color:
                 for c in range(6):
                     it.setBackground(c, QBrush(color))
-            if node.status is not Status.IDENTICAL:
-                self.tree.setItemWidget(it, COL_ACT, self._arrows(node))
+            self.tree.setItemWidget(it, COL_ACT, self._arrows(node))
             for ch in node.children:
                 add(it, ch)
 
@@ -288,15 +286,27 @@ class FolderView(QWidget):
         lay = QHBoxLayout(w)
         lay.setContentsMargins(2, 0, 2, 0)
         lay.setSpacing(2)
-        for text, direction, enabled, tip in (
-            ("→", "ltr", node.left is not None, "Copiar de izquierda a derecha (machaca el destino)"),
-            ("←", "rtl", node.right is not None, "Copiar de derecha a izquierda (machaca el destino)"),
-        ):
+        differs = node.status is not Status.IDENTICAL
+        buttons = (
+            ("✕", lambda: self.delete_node(node, "left"), node.left is not None,
+             "Eliminar de la izquierda", True),
+            ("→", lambda: self.copy_node(node, "ltr"), node.left is not None,
+             "Copiar de izquierda a derecha (machaca el destino)", differs),
+            ("←", lambda: self.copy_node(node, "rtl"), node.right is not None,
+             "Copiar de derecha a izquierda (machaca el destino)", differs),
+            ("✕", lambda: self.delete_node(node, "right"), node.right is not None,
+             "Eliminar de la derecha", True),
+        )
+        for text, slot, enabled, tip, visible in buttons:
             b = QToolButton()
             b.setText(text)
             b.setToolTip(tip)
             b.setEnabled(enabled)
-            b.clicked.connect(lambda _=False, n=node, d=direction: self.copy_node(n, d))
+            b.setFixedWidth(28)
+            if text == "✕":
+                b.setStyleSheet("QToolButton:enabled { color: #c0392b; }")
+            b.clicked.connect(lambda _=False, f=slot: f())
+            b.setVisible(visible)
             lay.addWidget(b)
         return w
 
@@ -343,6 +353,34 @@ class FolderView(QWidget):
             copy_path(src, dst, ignore, p)
 
         self._start(job, lambda _r: self.compare(), "Copiando…", refresh_after_cancel=True)
+
+    def delete_node(self, node: DiffNode, side: str):
+        """Elimina el fichero/carpeta de un lado. Siempre pide confirmación."""
+        if self.busy:
+            return
+        target = node.left if side == "left" else node.right
+        if target is None:
+            return
+        side_name = "izquierda" if side == "left" else "derecha"
+        if node.is_dir:
+            n = sum(1 for x in [node, *iter_nodes(node)]
+                    if x.is_file and (x.left if side == "left" else x.right) is not None)
+            what = f"la carpeta (con {n} fichero(s))"
+        else:
+            what = "el fichero"
+        r = QMessageBox.warning(
+            self, "Confirmar eliminación",
+            f"Se ELIMINARÁ DEFINITIVAMENTE {what} de la {side_name}:\n{target}\n\n"
+            f"Esta acción no se puede deshacer. ¿Continuar?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+
+        def job(p: Progress):
+            p.set_total(max(1, count_files(target, (), p)))
+            delete_path(target, p)
+
+        self._start(job, lambda _r: self.compare(), "Eliminando…", refresh_after_cancel=True)
 
     def _double_click(self, item: QTreeWidgetItem, _col: int):
         node: DiffNode = item.data(0, NODE_ROLE)

@@ -308,3 +308,17 @@ def copy_path(
         shutil.copy2(src, dst)
         if progress:
             progress.advance()
+
+
+def delete_path(path: Path, progress: Optional[Progress] = None) -> None:
+    """Elimina definitivamente un fichero o una carpeta (con todo su contenido)."""
+    if progress:
+        progress.check()
+    if _is_real_dir(path):
+        for child in path.iterdir():
+            delete_path(child, progress)
+        path.rmdir()
+    else:
+        path.unlink()
+        if progress:
+            progress.advance()

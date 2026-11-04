@@ -181,3 +181,15 @@ def test_inline_spans():
     assert [("el gato negro")[s:e] for s, e in sa] == ["gato"]
     assert [("el perro negro")[s:e] for s, e in sb] == ["perro"]
     assert inline_spans("igual", "igual") == ([], [])
+
+
+def test_delete_path(tmp_path):
+    from filecompare.core import delete_path
+    w(tmp_path / "d/a/b.txt", "1")
+    w(tmp_path / "d/c.txt", "2")
+    p = Progress()
+    delete_path(tmp_path / "d", p)
+    assert not (tmp_path / "d").exists() and p.done == 2
+    w(tmp_path / "f.txt", "x")
+    delete_path(tmp_path / "f.txt")
+    assert not (tmp_path / "f.txt").exists()
