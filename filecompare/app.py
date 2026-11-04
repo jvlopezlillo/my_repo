@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QLabel, QMainWindow, Q
                                QTabWidget, QVBoxLayout, QWidget)
 
 from . import __version__
+from .dialogs import LINUX, file_dialog_options
 from .folder_view import FolderView
 from .log import log_dir, logger, setup_logging
 from .text_view import TextDiffView
@@ -70,10 +72,11 @@ class MainWindow(QMainWindow):
         self._add_tab(view, "Carpetas")
 
     def pick_files(self):
-        a, _ = QFileDialog.getOpenFileName(self, "Fichero izquierdo")
+        a, _ = QFileDialog.getOpenFileName(self, "Fichero izquierdo", "", "", "", file_dialog_options())
         if not a:
             return
-        b, _ = QFileDialog.getOpenFileName(self, "Fichero derecho", str(Path(a).parent))
+        b, _ = QFileDialog.getOpenFileName(self, "Fichero derecho", str(Path(a).parent), "", "",
+                                           file_dialog_options())
         if b:
             self.open_text(Path(a), Path(b))
 
@@ -156,6 +159,9 @@ class MainWindow(QMainWindow):
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     log_path = setup_logging()
+    if LINUX:
+        # evita cargar el tema de plataforma GTK (su diálogo de ficheros aborta el ejecutable empaquetado)
+        os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
     qInstallMessageHandler(lambda mode, ctx, msg: logger.warning("Qt: %s", msg))
     app = QApplication(argv)
     app.setApplicationName("FileCompare")

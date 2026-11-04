@@ -60,5 +60,5 @@ pyinstaller --onefile --windowed --name FileCompare main.py   # ejecutable en di
 En GitHub Actions (`.github/workflows/build.yml`) se generan los ejecutables de Windows y Linux.
 El de Linux se compila en Debian 11 (glibc 2.31) para ser compatible con Debian 11+, Ubuntu 20.04+ y similares
 (x86-64), y se prueba arrancándolo en Debian 11/12 y Ubuntu 22.04/24.04. Por eso `requirements.txt` limita PySide6
-a `<6.10`: las versiones posteriores exigen glibc ≥ 2.34. En escritorios sin las librerías X11 de Qt puede hacer falta
+a `<6.10`: las versiones posteriores exigen glibc ≥ 2.34. En Linux se usa el diálogo de ficheros de Qt (no el de GTK, que cerraba el ejecutable empaquetado con un error de iconos). En escritorios sin las librerías X11 de Qt puede hacer falta
 `sudo apt install libxcb-cursor0`.

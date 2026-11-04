@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QStyleOptionButton, QSty
 
 from .core import (DiffNode, Progress, Status, compare_dirs, copy_path, count_files, delete_path,
                    iter_nodes, parse_ignore, path_under, refresh_path, summarize)
+from .dialogs import file_dialog_options
 from .log import logger
 from .worker import Worker
 
@@ -217,7 +218,9 @@ class FolderView(QWidget):
 
     # ---- helpers ----------------------------------------------------------
     def _browse(self, edit: QLineEdit):
-        d = QFileDialog.getExistingDirectory(self, "Elegir carpeta", edit.text() or str(Path.home()))
+        d = QFileDialog.getExistingDirectory(
+            self, "Elegir carpeta", edit.text() or str(Path.home()),
+            file_dialog_options(QFileDialog.Option.ShowDirsOnly))
         if d:
             edit.setText(d)
             if self.left_edit.text() and self.right_edit.text():
