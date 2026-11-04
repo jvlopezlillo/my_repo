@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gitree
+Comment=Cliente Git gráfico inspirado en Sourcetree
+Exec=/RUTA/A/my_repo/gitree.sh %f
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=gitree
