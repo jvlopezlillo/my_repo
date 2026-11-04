@@ -16,6 +16,7 @@ from .core import (DiffNode, Progress, Status, compare_dirs, copy_path, count_fi
                    iter_nodes, parse_ignore, path_under, refresh_path, summarize)
 from .dialogs import file_dialog_options
 from .log import logger
+from .ruler import GREEN, ORANGE, OverviewRuler
 from .worker import Worker
 
 STATUS_TEXT = {
@@ -200,7 +201,18 @@ class FolderView(QWidget):
         lay = QVBoxLayout(self)
         lay.addLayout(paths)
         lay.addLayout(opts)
-        lay.addWidget(self.tree, 1)
+        self._ruler_rows: Optional[list] = None  # filas visibles (caché de la regla)
+        self.ruler = OverviewRuler(self._ruler_data, top_margin=lambda: self.tree.header().height())
+        self.ruler.clicked.connect(self._on_ruler_click)
+        tree_row = QHBoxLayout()
+        tree_row.setSpacing(0)
+        tree_row.addWidget(self.tree, 1)
+        tree_row.addWidget(self.ruler)
+        lay.addLayout(tree_row, 1)
+        self.tree.itemExpanded.connect(self._ruler_invalidate)
+        self.tree.itemCollapsed.connect(self._ruler_invalidate)
+        self.tree.verticalScrollBar().valueChanged.connect(lambda _=0: self.ruler.update())
+        self.tree.verticalScrollBar().rangeChanged.connect(lambda *_: self.ruler.update())
         lay.addWidget(self.summary)
 
         self.prog_label, self.bar = QLabel(), QProgressBar()
@@ -375,6 +387,7 @@ class FolderView(QWidget):
 
         restore(self.tree.invisibleRootItem())
         self._apply_filter()
+        self._ruler_invalidate()
         self.tree.setUpdatesEnabled(True)
         logger.info("Lista pintada: %d filas, construir=%.2fs, resto=%.2fs",
                     sum(1 for _ in iter_nodes(self.root)), t1 - t0, time.perf_counter() - t1)
@@ -391,6 +404,52 @@ class FolderView(QWidget):
         else:
             self.delete_node(node, "left" if action == "del_left" else "right")
 
+    # ---- regla de diferencias -------------------------------------------------------
+    def _ruler_invalidate(self, *_):
+        self._ruler_rows = None
+        self.ruler.update()
+
+    def _visible_rows(self) -> list:
+        """Filas del árbol en el orden en que se ven (las contraídas ocultan sus hijas)."""
+        if self._ruler_rows is None:
+            rows: list = []
+
+            def walk(parent: QTreeWidgetItem):
+                for i in range(parent.childCount()):
+                    c = parent.child(i)
+                    if c.isHidden():
+                        continue
+                    rows.append(c)
+                    if c.isExpanded():
+                        walk(c)
+
+            walk(self.tree.invisibleRootItem())
+            self._ruler_rows = rows
+        return self._ruler_rows
+
+    def _ruler_data(self):
+        rows = self._visible_rows()
+        marks = []
+        for i, it in enumerate(rows):
+            node: DiffNode = it.data(0, NODE_ROLE)
+            if node.status is Status.IDENTICAL:
+                continue
+            if node.is_dir and it.isExpanded() and it.childCount():
+                continue  # sus hijos llevan las marcas
+            color = GREEN if node.status in (Status.LEFT_ONLY, Status.RIGHT_ONLY) else ORANGE
+            marks.append((i, i + 1, color))
+        row_h = max(1, self.tree.sizeHintForRow(0)) if rows else 1
+        first = self.tree.verticalScrollBar().value()
+        last = first + max(1, self.tree.viewport().height() // row_h) - 1
+        return len(rows), marks, (first, min(last, max(0, len(rows) - 1))) if rows else None, -1
+
+    def _on_ruler_click(self, frac: float):
+        rows = self._visible_rows()
+        if rows:
+            item = rows[min(len(rows) - 1, int(frac * len(rows)))]
+            self.tree.scrollToItem(item, QTreeWidget.PositionAtCenter)
+            self.tree.setCurrentItem(item)
+
     def _apply_filter(self):
         only = self.only_diff.isChecked()
 
@@ -401,6 +460,7 @@ class FolderView(QWidget):
                 walk(c)
 
         walk(self.tree.invisibleRootItem())
+        self._ruler_invalidate()
 
     # ---- acciones ---------------------------------------------------------
     def copy_node(self, node: DiffNode, direction: str):

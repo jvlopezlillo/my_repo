@@ -30,13 +30,18 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
 
 ### Comparación de texto
 - Paneles **editables** y alineados, con numeración de líneas y bloques distintos resaltados
-  (rojo: sólo izquierda, verde: sólo derecha, naranja: modificado). Dentro de las líneas modificadas se resaltan
+  (verde: líneas o bloques que sólo están en un lado, naranja: modificado). Dentro de las líneas modificadas se resaltan
   las palabras que cambian. Se puede teclear también en las filas grises de relleno.
 - **Alineación por parecido:** primero se buscan las líneas idénticas (sin contar las líneas en blanco, que no sirven de
   ancla) y, entre ellas, las líneas se emparejan con la más parecida en vez de por posición. Lo que no se parece a nada
   queda como «sólo a un lado».
 - Al dejar de teclear se recalcula la comparación. En el canal central, cada bloque tiene flechas **→ / ←**
   para copiarlo en cualquier sentido.
+- **F8 / Shift+F8** llevan el cursor y el foco a la siguiente / anterior diferencia (modificada, nueva o que sólo está
+  en un lado), partiendo de donde estés; al llegar al final vuelve al principio.
+- **Regla de diferencias** a la derecha (también en la lista de carpetas): una marca por diferencia en su posición
+  proporcional, **naranja** = distinto y **verde** = nuevo / sólo en un lado, con la zona visible indicada. Pulsar o
+  arrastrar sobre ella salta a esa zona.
 - Deshacer/Rehacer (Ctrl+Z / Ctrl+Y), siguiente/anterior diferencia (F8 / Shift+F8), «Ignorar espacios» (activada por defecto)
   y guardado independiente de cada lado (**Ctrl+1** izquierda, **Ctrl+2** derecha).
 - Se conservan codificación (UTF-8, UTF-8 con BOM, UTF-16, Latin-1), saltos de línea (LF/CRLF) y el salto final.

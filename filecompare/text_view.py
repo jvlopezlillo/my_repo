@@ -11,11 +11,13 @@ from PySide6.QtWidgets import (QCheckBox, QGridLayout, QHBoxLayout, QLabel, QMes
                                QPlainTextEdit, QPushButton, QSizePolicy, QTextEdit,
                                QVBoxLayout, QWidget)
 
+from .ruler import GREEN, ORANGE, OverviewRuler
 from .textdiff import TextDocument, apply_block, compute_diff, inline_spans
 
+# naranja = distinto; verde = líneas o bloques que sólo están en un lado (nuevos)
 COLORS = {
     "replace": QColor(235, 170, 40),
-    "delete": QColor(225, 80, 80),
+    "delete": QColor(70, 175, 95),
     "insert": QColor(70, 175, 95),
 }
 FILLER = QColor(128, 128, 128)
@@ -171,6 +173,8 @@ class TextDiffView(QWidget):
             self.numbers[s].setFont(mono)
         self.gutter = Gutter(self)
         self.gutter.copyRequested.connect(self.copy_block)
+        self.ruler = OverviewRuler(self._ruler_data)
+        self.ruler.clicked.connect(self._on_ruler_click)
         for a, b in ((self.left_edit, self.right_edit), (self.right_edit, self.left_edit)):
             a.verticalScrollBar().valueChanged.connect(b.verticalScrollBar().setValue)
             a.horizontalScrollBar().valueChanged.connect(b.horizontalScrollBar().setValue)
@@ -224,6 +228,7 @@ class TextDiffView(QWidget):
         grid.addWidget(self.gutter, 1, 2)
         grid.addWidget(self.numbers["right"], 1, 3)
         grid.addWidget(self.right_edit, 1, 4)
+        grid.addWidget(self.ruler, 1, 5)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(4, 1)
         grid.setRowStretch(1, 1)
@@ -257,6 +262,7 @@ class TextDiffView(QWidget):
 
     def _repaint_side(self):
         self.gutter.update()
+        self.ruler.update()
         for n in self.numbers.values():
             n.update()
 
@@ -355,7 +361,7 @@ class TextDiffView(QWidget):
                 self.labels[s].setText(f"{'● ' if modified else ''}{d.path}")
             self.labels[s].setToolTip(str(d.path))
         n = len(self.blocks)
-        self.info.setText("  Los ficheros son idénticos" if n == 0 else f"  {n} bloque(s) distinto(s)")
+        self._update_info()
         self.btn_undo.setEnabled(bool(self.undo_stack))
         self.btn_redo.setEnabled(bool(self.redo_stack))
         self.btn_prev.setEnabled(n > 0)
@@ -442,20 +448,77 @@ class TextDiffView(QWidget):
             self.left_doc.lines, self.right_doc.lines = list(l), list(r)
             self.rebuild()
 
+    # ---- navegación entre diferencias ----------------------------------------------------
+    def _update_info(self):
+        n = len(self.blocks)
+        if n == 0:
+            self.info.setText("  Los ficheros son idénticos")
+        elif self.current >= 0:
+            self.info.setText(f"  Diferencia {self.current + 1} de {n}")
+        else:
+            self.info.setText(f"  {n} diferencia(s)")
+
+    def _ruler_data(self):
+        total = self.left_edit.document().blockCount()
+        marks = [(b.row_start, b.row_start + b.row_count, ORANGE if b.tag == "replace" else GREEN)
+                 for b in self.blocks]
+        e = self.left_edit
+        first = e.firstVisibleBlock().blockNumber()
+        last = e.cursorForPosition(QPoint(0, max(0, e.viewport().height() - 1))).blockNumber()
+        return total, marks, (first, last), self.current
+
+    def _focused_edit(self) -> QPlainTextEdit:
+        return next((e for e in (self.left_edit, self.right_edit) if e.hasFocus()), self.left_edit)
+
     def goto(self, step: int):
+        """Va a la diferencia siguiente (step=1) o anterior (step=-1) respecto al cursor."""
         self.flush()
         if not self.blocks:
             return
-        if self.current < 0:
-            self.current = 0 if step > 0 else len(self.blocks) - 1
+        row = self._focused_edit().textCursor().blockNumber()
+        untouched = self.current < 0 and row == 0  # aún no se ha navegado ni pulsado en el texto
+        if step > 0:
+            ref = -1 if untouched else row
+            target = next((b for b in self.blocks if b.row_start > ref), self.blocks[0])  # al final, vuelve al inicio
         else:
-            self.current = (self.current + step) % len(self.blocks)
-        blk = self.blocks[self.current]
-        line_h = max(1, self.left_edit.fontMetrics().lineSpacing())
-        self.left_edit.verticalScrollBar().setValue(
-            max(0, blk.row_start * line_h - self.left_edit.viewport().height() // 3))
+            ref = len(self.rows) if untouched else row
+            before = [b for b in self.blocks if b.row_start + b.row_count - 1 < ref]
+            target = before[-1] if before else self.blocks[-1]  # al principio, salta al final
+        self.goto_block(target.index)
+
+    def goto_block(self, index: int):
+        """Lleva el cursor y la vista al inicio del bloque `index` en los dos paneles."""
+        blk = self.blocks[index]
+        self.current = index
+        focus = self._focused_edit()
+        for e in (self.left_edit, self.right_edit):
+            e.setTextCursor(QTextCursor(e.document().findBlockByNumber(blk.row_start)))
+        focus.setFocus()
+        edit = self.left_edit
+        row_h = max(1, edit.blockBoundingGeometry(edit.document().findBlockByNumber(blk.row_start)).height())
+        visible = max(1, int(edit.viewport().height() / row_h))
+        edit.verticalScrollBar().setValue(max(0, blk.row_start - visible // 4))  # el bloque queda arriba, con contexto
         self._highlight()
         self._repaint_side()
+        self._update_info()
+
+    def _on_ruler_click(self, frac: float):
+        """Pulsar en la regla: salta a la diferencia más cercana (o desplaza la vista si no hay ninguna cerca)."""
+        total = max(1, self.left_edit.document().blockCount())
+        row = min(total - 1, int(frac * total))
+
+        def dist(b) -> int:
+            if b.row_start <= row < b.row_start + b.row_count:
+                return 0
+            return min(abs(row - b.row_start), abs(row - (b.row_start + b.row_count - 1)))
+
+        best = min(self.blocks, key=dist, default=None)
+        if best is not None and dist(best) <= max(1, int(total * 0.02)):
+            self.goto_block(best.index)
+            return
+        e = self.left_edit
+        visible = max(1, int(e.viewport().height() / max(1, e.fontMetrics().lineSpacing())))
+        e.verticalScrollBar().setValue(max(0, row - visible // 2))
 
     def save_side(self, side: str) -> bool:
         self.flush()
