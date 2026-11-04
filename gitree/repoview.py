@@ -23,6 +23,7 @@ class RepoView(QWidget):
         super().__init__()
         self.repo = repo
         self._tasks: set[Task] = set()
+        self._view = "history"
 
         self.sidebar = Sidebar()
         self.workspace = WorkspaceView(repo)
@@ -48,6 +49,7 @@ class RepoView(QWidget):
         self.workspace.changed.connect(self.refresh)
         self.workspace.pushRequested.connect(self.push)
         self.history.action.connect(self._history_action)
+        self.history.wipSelected.connect(lambda _on: self._place_workspace())
         self.refresh()
 
     # ----------------------------------------------------------- utilidades
@@ -56,7 +58,9 @@ class RepoView(QWidget):
         return bool(self._tasks)
 
     def show_view(self, name: str) -> None:
+        self._view = name
         self.sidebar.set_view(name)
+        self._place_workspace()
         self.stack.setCurrentWidget(self.workspace if name == "status" else self.history)
         for i in range(self.sidebar.topLevelItemCount()):
             top = self.sidebar.topLevelItem(i)
@@ -64,6 +68,18 @@ class RepoView(QWidget):
                 d = top.child(j).data(0, Qt.ItemDataRole.UserRole)
                 if d and d[0] == "view":
                     top.child(j).setSelected(d[1] == name)
+
+    def _place_workspace(self) -> None:
+        """El panel de ficheros vive en la vista «Estado», o bajo el historial si la fila
+        «Cambios sin confirmar» está seleccionada (como en Sourcetree)."""
+        if self._view == "history" and self.history.wip_selected:
+            if self.stack.indexOf(self.workspace) >= 0:
+                self.stack.removeWidget(self.workspace)
+            self.history.embed_workspace(self.workspace)
+        else:
+            self.history.release_workspace(self.workspace)
+            if self.stack.indexOf(self.workspace) < 0:
+                self.stack.insertWidget(0, self.workspace)
 
     def refresh(self) -> None:
         try:
@@ -75,7 +91,7 @@ class RepoView(QWidget):
             return
         self.sidebar.populate(refs, stashes, len(status))
         self.workspace.populate(status)
-        self.history.reload()
+        self.history.reload(len(status))
         self.refreshed.emit()
 
     def current_branch_label(self) -> str:

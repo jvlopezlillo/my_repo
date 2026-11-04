@@ -1,12 +1,13 @@
 """Vista de historial: tabla con grafo + detalle de commit + diff."""
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QMenu, QSplitter, QStyle, QStyledItemDelegate,
+                               QListWidget, QListWidgetItem, QMenu, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
                                QTableView, QTextBrowser, QVBoxLayout, QWidget)
 
 from .diffview import DiffView
@@ -55,9 +56,9 @@ class CommitModel(QAbstractTableModel):
             if col == 2:
                 return datetime.fromtimestamp(c.date).strftime("%d %b %Y %H:%M")
             if col == 3:
-                return c.author
+                return "*" if c.wip else c.author
             if col == 4:
-                return c.short
+                return "*" if c.wip else c.short
         if role == Qt.ItemDataRole.ToolTipRole and col == 1:
             return f"{c.subject}\n\n{c.author} <{c.email}>"
         if role == Qt.ItemDataRole.FontRole and col == 4:
@@ -99,10 +100,20 @@ class HistoryDelegate(QStyledItemDelegate):
         for sx, sy, ex, ey, color in row.segments:
             pen = QPen(QColor(LANE_COLORS[color % len(LANE_COLORS)]), 2)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            if commit.wip:
+                pen.setStyle(Qt.PenStyle.DotLine)
             p.setPen(pen)
             p.drawLine(pt(sx, sy), pt(ex, ey))
         c = pt(row.col, 0.5)
         color = QColor(LANE_COLORS[row.color % len(LANE_COLORS)])
+        if commit.wip:  # círculo hueco con punto central (como Sourcetree)
+            p.setPen(QPen(color, 2))
+            p.setBrush(QColor("white"))
+            p.drawEllipse(c, 6, 6)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(c, 2.5, 2.5)
+            return
         is_head = any(r.is_head for r in commit.refs)
         p.setPen(QPen(QColor("white") if selected else QColor("#ffffff"), 2))
         p.setBrush(color)
@@ -143,9 +154,11 @@ class HistoryDelegate(QStyledItemDelegate):
             p.setPen(QColor(fg))
             p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
             x += w + 5
-        p.setFont(option.font)
+        font = QFont(option.font)
+        font.setBold(c.wip)
+        p.setFont(font)
         p.setPen(QColor("white") if selected else QColor("#1f2937"))
-        fm = QFontMetrics(option.font)
+        fm = QFontMetrics(font)
         text = fm.elidedText(c.subject, Qt.TextElideMode.ElideRight, max(rect.right() - x - 6, 10))
         p.drawText(QRectF(x, rect.top(), rect.right() - x, rect.height()),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
@@ -153,11 +166,14 @@ class HistoryDelegate(QStyledItemDelegate):
 
 class HistoryView(QWidget):
     action = Signal(str, object)  # nombre de la acción, Commit
+    wipSelected = Signal(bool)    # la fila «cambios sin confirmar» (des)seleccionada
 
     def __init__(self, repo: Repo):
         super().__init__()
         self.repo = repo
         self._files: list[tuple[str, str, str | None]] = []
+        self._wip_count = 0
+        self.wip_selected = False
 
         # barra de filtro
         self.search = QLineEdit(placeholderText="Buscar en el historial (mensaje, autor, hash)… Enter = siguiente")
@@ -205,9 +221,11 @@ class HistoryView(QWidget):
         bottom.addWidget(self.diff)
         bottom.setSizes([360, 700])
 
-        split = QSplitter(Qt.Orientation.Vertical)
+        self.bottom_stack = QStackedWidget()
+        self.bottom_stack.addWidget(bottom)
+        self.split = split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(self.table)
-        split.addWidget(bottom)
+        split.addWidget(self.bottom_stack)
         split.setSizes([420, 300])
 
         lay = QVBoxLayout(self)
@@ -224,24 +242,52 @@ class HistoryView(QWidget):
         self.search.returnPressed.connect(self._find_next)
 
     # ---------------------------------------------------------------- carga
-    def reload(self) -> None:
+    def reload(self, wip_count: int | None = None) -> None:
+        if wip_count is not None:
+            self._wip_count = wip_count
         keep = self.selected_commit()
+        keep_wip = self.wip_selected
+        first_load = self.model.rowCount() == 0
         commits = self.repo.log(all_refs=self.all_branches.isChecked())
+        n_real = len(commits)
+        if self._wip_count:
+            head = self.repo.head_hash()
+            wip = Commit("WIP", [head] if head else [], "*", "", int(time.time()),
+                         f"Cambios sin confirmar ({self._wip_count})", wip=True)
+            commits = [wip] + commits
         self.model.set_commits(commits)
         self.table.setColumnWidth(0, min(max(self.model.max_lanes * LANE_W + 20, 50), 260))
-        self.count_label.setText(f"{len(commits)} commits")
-        row = 0
-        if keep:
-            row = next((i for i, c in enumerate(commits) if c.hash == keep.hash), 0)
-        if commits:
-            self.table.selectRow(row)
-            self.table.scrollTo(self.model.index(row, 1))
-        else:
+        self.count_label.setText(f"{n_real} commits")
+        if not commits:
             self._on_commit_selected(QModelIndex(), QModelIndex())
+            return
+        row = 0  # por defecto: la fila superior (cambios sin confirmar si existen)
+        if keep_wip and self._wip_count:
+            row = 0
+        elif keep and not first_load:
+            row = next((i for i, c in enumerate(commits) if c.hash == keep.hash), 0)
+        self.table.selectRow(row)
+        self.table.scrollTo(self.model.index(row, 1))
+        # selectRow no emite currentRowChanged si la fila no cambió: refrescar el detalle igualmente
+        self._on_commit_selected(self.model.index(row, 0), QModelIndex())
+
+    def embed_workspace(self, ws: QWidget) -> None:
+        if self.bottom_stack.indexOf(ws) < 0:
+            self.bottom_stack.addWidget(ws)
+        self.bottom_stack.setCurrentWidget(ws)
+        sizes = self.split.sizes()
+        if sizes[1] < 400 and sum(sizes) > 600:
+            self.split.setSizes([max(sum(sizes) - 440, 140), 440])
+
+    def release_workspace(self, ws: QWidget) -> None:
+        if self.bottom_stack.indexOf(ws) >= 0:
+            self.bottom_stack.removeWidget(ws)
+        self.bottom_stack.setCurrentIndex(0)
 
     def selected_commit(self) -> Commit | None:
         idx = self.table.currentIndex()
-        return idx.data(COMMIT_ROLE) if idx.isValid() else None
+        c = idx.data(COMMIT_ROLE) if idx.isValid() else None
+        return None if c is None or c.wip else c
 
     def select_hash(self, h: str) -> None:
         for i, c in enumerate(self.model.commits):
@@ -259,6 +305,8 @@ class HistoryView(QWidget):
         for k in range(n):
             i = (start + k) % n
             c = self.model.commits[i]
+            if c.wip:
+                continue
             if q in c.subject.lower() or q in c.author.lower() or c.hash.startswith(q):
                 self.select_hash(c.hash)
                 return
@@ -266,6 +314,13 @@ class HistoryView(QWidget):
     # -------------------------------------------------------------- detalle
     def _on_commit_selected(self, cur: QModelIndex, _prev: QModelIndex) -> None:
         c = cur.data(COMMIT_ROLE) if cur.isValid() else None
+        wip = bool(c and c.wip)
+        changed = wip != self.wip_selected
+        self.wip_selected = wip
+        if changed or wip:
+            self.wipSelected.emit(wip)
+        if wip:
+            return
         self.files.clear()
         self.diff.show_diff("", None)
         if not c:

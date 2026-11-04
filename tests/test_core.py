@@ -41,6 +41,9 @@ def test_status_stage_commit(repo):
     repo.commit("primero")
     assert repo.status() == []
     assert [c.subject for c in repo.log()] == ["primero"]
+    root = repo.log()[0]
+    assert repo.commit_files(root) == [("A", "a.txt", None)]
+    assert "+hola" in repo.commit_file_diff(root, "a.txt")
 
 
 def test_branch_merge_graph(repo):

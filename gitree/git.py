@@ -5,7 +5,6 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 
-EMPTY_TREE = "4b825dc642cb199aaf1e8bcd11e5a21b1da2ad4"
 _FS = "\x1f"
 _RS = "\x1e"
 
@@ -32,6 +31,7 @@ class Commit:
     date: int
     subject: str
     refs: list[Ref] = field(default_factory=list)
+    wip: bool = False  # fila virtual «cambios sin confirmar»
 
     @property
     def short(self) -> str:
@@ -142,6 +142,9 @@ class Repo:
     # ----------------------------------------------------------------- state
     def has_commits(self) -> bool:
         return self.run("rev-parse", "--verify", "-q", "HEAD", check=False).strip() != ""
+
+    def head_hash(self) -> str | None:
+        return self.run("rev-parse", "--verify", "-q", "HEAD", check=False).strip() or None
 
     def current_branch(self) -> str | None:
         out = self.run("symbolic-ref", "-q", "--short", "HEAD", check=False).strip()
@@ -254,8 +257,10 @@ class Repo:
 
     def commit_files(self, c: Commit) -> list[tuple[str, str, str | None]]:
         """Devuelve [(estado, ruta, ruta_origen)] contra el primer padre."""
-        base = c.parents[0] if c.parents else EMPTY_TREE
-        out = self.run("diff", "-M", "--name-status", "-z", base, c.hash)
+        if c.parents:
+            out = self.run("diff", "-M", "--name-status", "-z", c.parents[0], c.hash)
+        else:  # commit raíz
+            out = self.run("diff-tree", "--root", "-r", "-M", "--no-commit-id", "--name-status", "-z", c.hash)
         parts = out.split("\0")
         res, i = [], 0
         while i < len(parts) and parts[i]:
@@ -269,9 +274,10 @@ class Repo:
         return res
 
     def commit_file_diff(self, c: Commit, path: str, orig: str | None = None) -> str:
-        base = c.parents[0] if c.parents else EMPTY_TREE
         paths = [orig, path] if orig else [path]
-        return self.run("diff", "-M", base, c.hash, "--", *paths, check=False)
+        if c.parents:
+            return self.run("diff", "-M", c.parents[0], c.hash, "--", *paths, check=False)
+        return self.run("show", "--format=", "-M", c.hash, "--", *paths, check=False)
 
     # --------------------------------------------------------- working copy
     def diff_file(self, fs: FileStatus, staged: bool) -> str:

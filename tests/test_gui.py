@@ -77,10 +77,28 @@ def test_full_flow(app, tmp_path):
     assert not rv.busy
     assert repo.refs().local[0].upstream == "origin/main"
 
-    # acciones del historial
+    # fila «Cambios sin confirmar»
+    hv = rv.history
+    assert hv.model.commits[0].wip and not hv.wip_selected  # no roba la selección
     rv.show_view("history")
-    c = rv.history.selected_commit()
-    rv._history_action("tag", c) if False else repo.create_tag("v0", c.hash)
+    hv.table.selectRow(0)
+    assert hv.model.commits[0].wip and hv.model.commits[0].parents == [repo.head_hash()]
+    assert hv.wip_selected and rv.stack.indexOf(ws) < 0 and hv.bottom_stack.indexOf(ws) >= 0
+    rv.show_view("status")  # la vista completa recupera el panel
+    assert rv.stack.indexOf(ws) >= 0 and hv.bottom_stack.indexOf(ws) < 0
+    rv.show_view("history")
+    assert hv.bottom_stack.currentWidget() is ws
+
+    # al confirmar todo desaparece la fila virtual y se muestran los detalles del commit
+    ws.unstaged.item(0).setCheckState(Qt.CheckState.Checked)
+    ws.message.setPlainText("Segundo")
+    ws.commit()
+    assert not hv.model.commits[0].wip and not hv.wip_selected
+    assert hv.selected_commit().subject == "Segundo"
+    assert rv.stack.indexOf(ws) >= 0
+
+    # acciones del historial
+    repo.create_tag("v0", hv.selected_commit().hash)
     rv.refresh()
     assert "v0" in repo.refs().tags
     win.close()
