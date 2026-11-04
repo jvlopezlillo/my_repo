@@ -8,6 +8,7 @@ from typing import Callable
 from PySide6.QtCore import QThread, Signal
 
 from .core import Cancelled, Progress
+from .log import logger
 
 
 class Worker(QThread):
@@ -34,6 +35,7 @@ class Worker(QThread):
         except Cancelled:
             self.canceled.emit()
         except Exception as e:  # noqa: BLE001 - se informa a la GUI
+            logger.exception("Error en el hilo de trabajo")
             self.failed.emit(f"{type(e).__name__}: {e}")
         else:
             self.succeeded.emit(result)

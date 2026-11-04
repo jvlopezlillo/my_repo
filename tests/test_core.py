@@ -193,3 +193,36 @@ def test_delete_path(tmp_path):
     w(tmp_path / "f.txt", "x")
     delete_path(tmp_path / "f.txt")
     assert not (tmp_path / "f.txt").exists()
+
+
+def _flat(root):
+    return {n.rel: (n.status, n.left is not None, n.right is not None) for n in iter_nodes(root)}
+
+
+def test_refresh_path_matches_full_compare(tmp_path):
+    from filecompare.core import copy_path as cp, delete_path, refresh_path
+    L, R = make(tmp_path)
+    ign = [".git"]
+    root = compare_dirs(L, R, ign)
+    # copiar fichero, carpeta izq-only (crea carpeta en la derecha), borrar en un lado y en ambos
+    cp(L / "diff.txt", R / "diff.txt")
+    refresh_path(root, "diff.txt", L, R, ign)
+    assert _flat(root) == _flat(compare_dirs(L, R, ign))
+    cp(L / "newdir", R / "newdir", ign)
+    refresh_path(root, "newdir", L, R, ign)
+    assert _flat(root) == _flat(compare_dirs(L, R, ign))
+    delete_path(R / "sub2" / "f.txt")
+    refresh_path(root, "sub2/f.txt", L, R, ign)
+    assert _flat(root) == _flat(compare_dirs(L, R, ign))
+    delete_path(L / "only_l.txt")
+    refresh_path(root, "only_l.txt", L, R, ign)
+    assert "only_l.txt" not in _flat(root)
+    assert _flat(root) == _flat(compare_dirs(L, R, ign))
+    # copiar un fichero dentro de una carpeta que sólo existe a la izquierda crea la carpeta padre
+    w(L / "solo/inner/a.txt", "1")
+    root = compare_dirs(L, R, ign)
+    cp(L / "solo/inner/a.txt", R / "solo/inner/a.txt")
+    refresh_path(root, "solo/inner/a.txt", L, R, ign)
+    assert _flat(root) == _flat(compare_dirs(L, R, ign))
+    with pytest.raises(KeyError):
+        refresh_path(root, "no/existe/x.txt", L, R, ign)

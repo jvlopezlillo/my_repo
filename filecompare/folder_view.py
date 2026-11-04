@@ -6,14 +6,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QStyleOptionButton, QStyledItemDelegate, QToolTip, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QMessageBox, QProgressBar, QPushButton, QStyle,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .core import (DiffNode, Progress, Status, compare_dirs, copy_path, count_files, delete_path,
-                   iter_nodes, parse_ignore, path_under, summarize)
+                   iter_nodes, parse_ignore, path_under, refresh_path, summarize)
+from .log import logger
 from .worker import Worker
 
 STATUS_TEXT = {
@@ -49,6 +50,78 @@ def _info(path: Optional[Path], kind: Optional[str]) -> str:
         return "?"
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
     return f"{when}" if kind == "dir" else f"{_fmt_size(st.st_size)}   {when}"
+
+
+class ActionDelegate(QStyledItemDelegate):
+    """Dibuja los botones ✕ → ← ✕ de cada fila sin crear un widget por fila (mucho más rápido)."""
+
+    BTN_W, GAP = 28, 2
+
+    def __init__(self, parent, on_action):
+        super().__init__(parent)
+        self.on_action = on_action  # (nodo, acción)
+
+    def _buttons(self, rect: QRect, node: DiffNode):
+        differs = node.status is not Status.IDENTICAL
+        specs = (
+            ("✕", "del_left", node.left is not None, True, "Eliminar de la izquierda"),
+            ("→", "ltr", node.left is not None, differs, "Copiar de izquierda a derecha (machaca el destino)"),
+            ("←", "rtl", node.right is not None, differs, "Copiar de derecha a izquierda (machaca el destino)"),
+            ("✕", "del_right", node.right is not None, True, "Eliminar de la derecha"),
+        )
+        total = len(specs) * self.BTN_W + (len(specs) - 1) * self.GAP
+        x = rect.x() + max(0, (rect.width() - total) // 2)
+        h = min(rect.height() - 2, 22)
+        y = rect.y() + (rect.height() - h) // 2
+        out = []
+        for i, (glyph, action, enabled, visible, tip) in enumerate(specs):
+            if visible:
+                out.append((QRect(x + i * (self.BTN_W + self.GAP), y, self.BTN_W, h), glyph, action, enabled, tip))
+        return out
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)  # fondo (color de estado / selección)
+        node = index.data(NODE_ROLE)
+        if node is None:
+            return
+        style = option.widget.style() if option.widget else QApplication.style()
+        for r, glyph, action, enabled, _tip in self._buttons(option.rect, node):
+            opt = QStyleOptionButton()
+            opt.rect, opt.text = r, glyph
+            opt.state = QStyle.State_Raised | (QStyle.State_Enabled if enabled else QStyle.State_None)
+            opt.palette = option.palette
+            if glyph == "✕" and enabled:
+                opt.palette.setColor(opt.palette.ColorRole.ButtonText, QColor(192, 57, 43))
+            painter.save()
+            if not enabled:
+                painter.setOpacity(0.35)
+            style.drawControl(QStyle.CE_PushButton, opt, painter)
+            painter.restore()
+
+    def _hit(self, rect, node, pos: QPoint):
+        for r, _g, action, enabled, tip in self._buttons(rect, node):
+            if r.contains(pos):
+                return action, enabled, tip
+        return None
+
+    def editorEvent(self, event, model, option, index):
+        node = index.data(NODE_ROLE)
+        if node is not None and event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            hit = self._hit(option.rect, node, event.position().toPoint())
+            if hit and hit[1]:
+                # diferido: la acción puede reconstruir el árbol y no debe hacerse dentro del evento
+                QTimer.singleShot(0, lambda n=node, a=hit[0]: self.on_action(n, a))
+                return True
+        return False
+
+    def helpEvent(self, event, view, option, index):
+        node = index.data(NODE_ROLE)
+        hit = self._hit(option.rect, node, event.pos()) if node is not None else None
+        if hit:
+            QToolTip.showText(event.globalPos(), hit[2], view)
+            return True
+        QToolTip.hideText()
+        return False
 
 
 class FolderView(QWidget):
@@ -117,6 +190,8 @@ class FolderView(QWidget):
         h.setSectionResizeMode(COL_ACT, QHeaderView.Fixed)
         self.tree.setColumnWidth(COL_ACT, 130)
         h.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeToContents)
+        self.tree.setItemDelegateForColumn(COL_ACT, ActionDelegate(self.tree, self._on_action))
+        self.tree.setMouseTracking(True)
         self.tree.itemDoubleClicked.connect(self._double_click)
 
         lay = QVBoxLayout(self)
@@ -173,18 +248,22 @@ class FolderView(QWidget):
         self.busy = True
         for w in self.controls:
             w.setEnabled(False)
-        self.tree.setEnabled(False)
         self.prog_label.setText(label)
         self.bar.setRange(0, 0)  # indeterminada hasta conocer el total
         self.prog_row.show()
+        t0 = time.perf_counter()
+        logger.info("%s inicio", label)
         worker = Worker(job)
         self._workers.add(worker)
         self._current_worker = worker
         worker.progress.connect(self._on_progress)
-        worker.succeeded.connect(lambda r: (self._finish(), on_done(r)))
-        worker.failed.connect(lambda m: (self._finish(), QMessageBox.critical(self, "Error", m),
+        worker.succeeded.connect(lambda r: (logger.info("%s hecho en %.2fs", label, time.perf_counter() - t0),
+                                            self._finish(), on_done(r)))
+        worker.failed.connect(lambda m: (logger.error("%s falló: %s", label, m), self._finish(),
+                                         QMessageBox.critical(self, "Error", m),
                                          self.compare() if refresh_after_cancel else None))
-        worker.canceled.connect(lambda: (self._finish(), self.compare() if refresh_after_cancel else None))
+        worker.canceled.connect(lambda: (logger.warning("%s cancelado", label), self._finish(),
+                                         self.compare() if refresh_after_cancel else None))
         worker.finished.connect(lambda w=worker: self._workers.discard(w))
         worker.start()
 
@@ -200,7 +279,6 @@ class FolderView(QWidget):
         self.prog_row.hide()
         for w in self.controls:
             w.setEnabled(True)
-        self.tree.setEnabled(True)
 
     def _cancel(self):
         if self._current_worker:
@@ -228,19 +306,36 @@ class FolderView(QWidget):
         self._start(lambda p: compare_dirs(left, right, ignore, ws, eol, p),
                     self._on_compared, "Comparando…")
 
+    def _refresh_job(self, rel: str):
+        """Trabajo para el hilo: vuelve a comparar sólo `rel` (o todo si el árbol no lo permite)."""
+        left, right = self._roots()
+        ignore, ws, eol = self._ignore(), self.ws_chk.isChecked(), self.eol_chk.isChecked()
+        root = self.root
+
+        def job(p: Progress):
+            try:
+                refresh_path(root, rel, left, right, ignore, ws, eol, p)
+                return root
+            except KeyError:
+                logger.warning("refresh_path no pudo ubicar %r; se compara todo", rel)
+                return compare_dirs(left, right, ignore, ws, eol, p)
+
+        return job
+
     def _on_compared(self, root: DiffNode):
         self.root = root
         self._populate()
 
     def _populate(self):
+        t0 = time.perf_counter()
         self.tree.setUpdatesEnabled(False)
-        self.tree.clear()
         style = self.style()
         dir_icon, file_icon = style.standardIcon(QStyle.SP_DirIcon), style.standardIcon(QStyle.SP_FileIcon)
 
-        def add(parent, node: DiffNode):
-            it = QTreeWidgetItem(parent)
+        def make(node: DiffNode) -> QTreeWidgetItem:
+            it = QTreeWidgetItem()  # sin padre: no genera señales hasta añadirlo al árbol
             it.setData(0, NODE_ROLE, node)
+            it.setData(COL_ACT, NODE_ROLE, node)
             # cada lado en su columna; si no existe, se deja vacío en la misma fila
             for path, kind, col in ((node.left, node.left_kind, COL_LNAME),
                                     (node.right, node.right_kind, COL_RNAME)):
@@ -252,14 +347,16 @@ class FolderView(QWidget):
             it.setText(COL_STATUS, STATUS_TEXT[node.status])
             color = STATUS_COLOR.get(node.status)
             if color:
+                brush = QBrush(color)
                 for c in range(6):
-                    it.setBackground(c, QBrush(color))
-            self.tree.setItemWidget(it, COL_ACT, self._arrows(node))
-            for ch in node.children:
-                add(it, ch)
+                    it.setBackground(c, brush)
+            it.addChildren([make(ch) for ch in node.children])
+            return it
 
-        for ch in self.root.children:
-            add(self.tree.invisibleRootItem(), ch)
+        items = [make(ch) for ch in self.root.children]
+        t1 = time.perf_counter()
+        self.tree.clear()
+        self.tree.addTopLevelItems(items)
 
         # expandir: lo que estaba abierto, o las carpetas con diferencias la primera vez
         def restore(it: QTreeWidgetItem):
@@ -272,8 +369,10 @@ class FolderView(QWidget):
                 restore(c)
 
         restore(self.tree.invisibleRootItem())
-        self.tree.setUpdatesEnabled(True)
         self._apply_filter()
+        self.tree.setUpdatesEnabled(True)
+        logger.info("Lista pintada: %d filas, construir=%.2fs, resto=%.2fs",
+                    sum(1 for _ in iter_nodes(self.root)), t1 - t0, time.perf_counter() - t1)
         s = summarize(self.root)
         self.summary.setText(
             f"Ficheros: {s[Status.DIFFERENT]} diferentes · {s[Status.LEFT_ONLY]} sólo izquierda · "
@@ -281,34 +380,11 @@ class FolderView(QWidget):
             f"{s[Status.IDENTICAL]} idénticos"
         )
 
-    def _arrows(self, node: DiffNode) -> QWidget:
-        w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(2, 0, 2, 0)
-        lay.setSpacing(2)
-        differs = node.status is not Status.IDENTICAL
-        buttons = (
-            ("✕", lambda: self.delete_node(node, "left"), node.left is not None,
-             "Eliminar de la izquierda", True),
-            ("→", lambda: self.copy_node(node, "ltr"), node.left is not None,
-             "Copiar de izquierda a derecha (machaca el destino)", differs),
-            ("←", lambda: self.copy_node(node, "rtl"), node.right is not None,
-             "Copiar de derecha a izquierda (machaca el destino)", differs),
-            ("✕", lambda: self.delete_node(node, "right"), node.right is not None,
-             "Eliminar de la derecha", True),
-        )
-        for text, slot, enabled, tip, visible in buttons:
-            b = QToolButton()
-            b.setText(text)
-            b.setToolTip(tip)
-            b.setEnabled(enabled)
-            b.setFixedWidth(28)
-            if text == "✕":
-                b.setStyleSheet("QToolButton:enabled { color: #c0392b; }")
-            b.clicked.connect(lambda _=False, f=slot: f())
-            b.setVisible(visible)
-            lay.addWidget(b)
-        return w
+    def _on_action(self, node: DiffNode, action: str):
+        if action in ("ltr", "rtl"):
+            self.copy_node(node, action)
+        else:
+            self.delete_node(node, "left" if action == "del_left" else "right")
 
     def _apply_filter(self):
         only = self.only_diff.isChecked()
@@ -348,11 +424,16 @@ class FolderView(QWidget):
                 return
         ignore = self._ignore()
 
+        refresh = self._refresh_job(node.rel)
+        self._expanded = self._collect_expanded()
+        logger.info("Copiar %s -> %s", src, dst)
+
         def job(p: Progress):
             p.set_total(max(1, count_files(src, ignore, p)))
             copy_path(src, dst, ignore, p)
+            return refresh(p)  # sólo se vuelve a comparar lo copiado
 
-        self._start(job, lambda _r: self.compare(), "Copiando…", refresh_after_cancel=True)
+        self._start(job, self._on_compared, "Copiando…", refresh_after_cancel=True)
 
     def delete_node(self, node: DiffNode, side: str):
         """Elimina el fichero/carpeta de un lado. Siempre pide confirmación."""
@@ -376,13 +457,20 @@ class FolderView(QWidget):
         if r != QMessageBox.Yes:
             return
 
+        refresh = self._refresh_job(node.rel)
+        self._expanded = self._collect_expanded()
+        logger.info("Eliminar %s", target)
+
         def job(p: Progress):
             p.set_total(max(1, count_files(target, (), p)))
             delete_path(target, p)
+            return refresh(p)  # sólo se vuelve a comparar lo afectado
 
-        self._start(job, lambda _r: self.compare(), "Eliminando…", refresh_after_cancel=True)
+        self._start(job, self._on_compared, "Eliminando…", refresh_after_cancel=True)
 
     def _double_click(self, item: QTreeWidgetItem, _col: int):
+        if self.busy:
+            return
         node: DiffNode = item.data(0, NODE_ROLE)
         if node.is_dir:
             return  # el árbol ya expande/contrae

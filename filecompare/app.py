@@ -5,13 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QUrl, Qt, qInstallMessageHandler
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from . import __version__
 from .folder_view import FolderView
+from .log import log_dir, logger, setup_logging
 from .text_view import TextDiffView
 from .textdiff import BinaryFileError, TextDocument
 
@@ -48,6 +50,10 @@ class MainWindow(QMainWindow):
             a.setShortcut(key)
             a.triggered.connect(slot)
             menu.addAction(a)
+        help_menu = self.menuBar().addMenu("A&yuda")
+        a = QAction("Abrir carpeta de &logs", self)
+        a.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir()))))
+        help_menu.addAction(a)
 
     # ---- pestañas ---------------------------------------------------------
     def _add_tab(self, widget: QWidget, title: str, tip: str = ""):
@@ -149,6 +155,8 @@ class MainWindow(QMainWindow):
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
+    log_path = setup_logging()
+    qInstallMessageHandler(lambda mode, ctx, msg: logger.warning("Qt: %s", msg))
     app = QApplication(argv)
     app.setApplicationName("FileCompare")
     win = MainWindow()

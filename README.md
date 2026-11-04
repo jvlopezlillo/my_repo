@@ -39,6 +39,16 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
 - Se conservan codificación (UTF-8, UTF-8 con BOM, UTF-16, Latin-1), saltos de línea (LF/CRLF) y el salto final.
 - Los ficheros binarios se detectan y no se muestran.
 
+## Registro (logs)
+
+La aplicación escribe un log rotativo con las operaciones, tiempos y errores (incluidas excepciones no controladas y
+avisos de Qt):
+
+- Windows: `%LOCALAPPDATA%\FileCompare\filecompare.log`
+- Linux: `~/.local/state/FileCompare/filecompare.log`
+
+También se abre desde el menú `Ayuda → Abrir carpeta de logs`.
+
 ## Desarrollo
 
 ```bash

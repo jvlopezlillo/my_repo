@@ -162,6 +162,39 @@ def count_files(path: Optional[Path], ignore: Sequence[str] = (), progress: Opti
     return n
 
 
+def _make_child(
+    n: str,
+    crel: str,
+    l: Optional[tuple[Path, bool]],
+    r: Optional[tuple[Path, bool]],
+    ctx: _Ctx,
+) -> DiffNode:
+    """Nodo de una entrada que existe en un lado (l / r) o en ambos."""
+    if l and r:
+        (lp, ldir), (rp, rdir) = l, r
+        if ldir and rdir:
+            return _build_dir(lp, rp, crel, n, ctx)
+        if not ldir and not rdir:
+            ctx.check()
+            st = Status.IDENTICAL if files_equal(lp, rp, ctx.ws, ctx.eol) else Status.DIFFERENT
+            ctx.tick(2)
+            return DiffNode(n, crel, lp, rp, "file", "file", st)
+        ctx.tick(count_files(lp, ctx.ignore) + count_files(rp, ctx.ignore))
+        return DiffNode(n, crel, lp, rp, "dir" if ldir else "file",
+                        "dir" if rdir else "file", Status.TYPE_MISMATCH)
+    if l:
+        lp, ldir = l
+        if ldir:
+            return _build_dir(lp, None, crel, n, ctx)
+        ctx.tick()
+        return DiffNode(n, crel, lp, None, "file", None, Status.LEFT_ONLY)
+    rp, rdir = r
+    if rdir:
+        return _build_dir(None, rp, crel, n, ctx)
+    ctx.tick()
+    return DiffNode(n, crel, None, rp, None, "file", Status.RIGHT_ONLY)
+
+
 def _build_dir(
     left: Optional[Path], right: Optional[Path], rel: str, name: str, ctx: _Ctx
 ) -> DiffNode:
@@ -177,37 +210,7 @@ def _build_dir(
     children: list[DiffNode] = []
     for n in sorted(names, key=sort_key):
         crel = f"{rel}/{n}" if rel else n
-        l, r = lentries.get(n), rentries.get(n)
-        if l and r:
-            (lp, ldir), (rp, rdir) = l, r
-            if ldir and rdir:
-                children.append(_build_dir(lp, rp, crel, n, ctx))
-            elif not ldir and not rdir:
-                ctx.check()
-                st = Status.IDENTICAL if files_equal(lp, rp, ctx.ws, ctx.eol) else Status.DIFFERENT
-                ctx.tick(2)
-                children.append(DiffNode(n, crel, lp, rp, "file", "file", st))
-            else:
-                ctx.tick(1 if ldir else 0)
-                ctx.tick(1 if rdir else 0)
-                children.append(
-                    DiffNode(n, crel, lp, rp, "dir" if ldir else "file",
-                             "dir" if rdir else "file", Status.TYPE_MISMATCH)
-                )
-        elif l:
-            lp, ldir = l
-            if ldir:
-                children.append(_build_dir(lp, None, crel, n, ctx))
-            else:
-                ctx.tick()
-                children.append(DiffNode(n, crel, lp, None, "file", None, Status.LEFT_ONLY))
-        else:
-            rp, rdir = r
-            if rdir:
-                children.append(_build_dir(None, rp, crel, n, ctx))
-            else:
-                ctx.tick()
-                children.append(DiffNode(n, crel, None, rp, None, "file", Status.RIGHT_ONLY))
+        children.append(_make_child(n, crel, lentries.get(n), rentries.get(n), ctx))
 
     if right is None:
         status = Status.LEFT_ONLY
@@ -322,3 +325,60 @@ def delete_path(path: Path, progress: Optional[Progress] = None) -> None:
         path.unlink()
         if progress:
             progress.advance()
+
+
+def _child_key(node: DiffNode):
+    return ((node.left_kind or node.right_kind) != "dir", node.name.lower(), node.name)
+
+
+def _entry(root: Path, rel: str) -> Optional[tuple[Path, bool]]:
+    p = path_under(root, rel)
+    if not (p.exists() or p.is_symlink()):
+        return None
+    return p, _is_real_dir(p)
+
+
+def refresh_path(
+    root: DiffNode,
+    rel: str,
+    left_root: Path,
+    right_root: Path,
+    ignore: Sequence[str] = (),
+    ignore_ws: bool = False,
+    ignore_eol: bool = False,
+    progress: Optional[Progress] = None,
+) -> None:
+    """Vuelve a comparar sólo `rel` (y sus carpetas contenedoras) y actualiza el árbol en su sitio.
+
+    Es mucho más rápido que comparar todo de nuevo tras copiar o borrar un elemento.
+    Lanza KeyError si `rel` no cuelga del árbol (el llamante debe comparar todo).
+    """
+    left_root, right_root = Path(left_root), Path(right_root)
+    parts = rel.split("/")
+    chain = [root]
+    for part in parts[:-1]:
+        nxt = next((c for c in chain[-1].children if c.name == part), None)
+        if nxt is None:
+            raise KeyError(rel)
+        chain.append(nxt)
+    parent, name = chain[-1], parts[-1]
+    l, r = _entry(left_root, rel), _entry(right_root, rel)
+    if progress:
+        progress.done = 0
+        progress.set_total(max(1, count_files(l and l[0], ignore, progress)
+                               + count_files(r and r[0], ignore, progress)))
+    parent.children = [c for c in parent.children if c.name != name]
+    if l or r:
+        parent.children.append(_make_child(name, rel, l, r, _Ctx(ignore, ignore_ws, ignore_eol, progress)))
+        parent.children.sort(key=_child_key)
+    for anc in reversed(chain):  # de dentro hacia fuera
+        le, re_ = _entry(left_root, anc.rel), _entry(right_root, anc.rel)
+        anc.left, anc.right = (le[0] if le else None), (re_[0] if re_ else None)
+        anc.left_kind, anc.right_kind = ("dir" if le else None), ("dir" if re_ else None)
+        if not re_:
+            anc.status = Status.LEFT_ONLY
+        elif not le:
+            anc.status = Status.RIGHT_ONLY
+        else:
+            anc.status = (Status.IDENTICAL if all(c.status is Status.IDENTICAL for c in anc.children)
+                          else Status.DIFFERENT)
