@@ -1,0 +1,2 @@
+# < 6.10: las versiones posteriores exigen glibc >= 2.34 y el binario de Linux dejaría de ser portable
+PySide6-Essentials>=6.6,<6.10
