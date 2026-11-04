@@ -1,0 +1,32 @@
+name: Build Gitree
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux-binary:
+    # Ubuntu 22.04: glibc más antigua => el binario funciona en más distribuciones
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller pytest
+      - name: Tests
+        run: QT_QPA_PLATFORM=offscreen python -m pytest -q tests
+      - name: Compilar
+        run: ./build.sh
+      - name: Empaquetar
+        run: tar -C dist -czf gitree-linux-x86_64.tar.gz gitree
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gitree-linux-x86_64
+          path: gitree-linux-x86_64.tar.gz
+      - name: Adjuntar a la release (solo en tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gitree-linux-x86_64.tar.gz

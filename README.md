@@ -31,6 +31,16 @@ Para tener un lanzador en el menú de aplicaciones, edita la ruta de `gitree.des
 
 Atajos: `Ctrl+O` abrir · `Ctrl+Shift+F/L/P` fetch/pull/push · `Ctrl+Shift+B` rama · `Ctrl+Shift+M` merge · `Ctrl+1/2` estado/historial · `F5` actualizar · `Ctrl+Intro` commit.
 
+## Ejecutable autónomo
+
+```bash
+pip install -r requirements.txt pyinstaller
+./build.sh          # genera dist/gitree (~60 MB, no necesita Python ni PySide6)
+```
+
+La acción de GitHub *Build Gitree* (pestaña Actions → Run workflow, o al subir un tag `v*`) compila el binario y lo
+deja como artefacto `gitree-linux-x86_64`; con un tag también lo adjunta a la release. Requiere `git` instalado en el sistema.
+
 ## Limitaciones conocidas
 
 - Para remotos HTTPS se necesita un *credential helper* configurado (no hay diálogo de contraseña); SSH con agente funciona.
