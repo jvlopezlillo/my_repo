@@ -138,7 +138,7 @@ class TextDiffView(QWidget):
     dirtyChanged = Signal(bool)
     saved = Signal()
 
-    def __init__(self, left: TextDocument, right: TextDocument, ignore_ws: bool = False, parent=None):
+    def __init__(self, left: TextDocument, right: TextDocument, ignore_ws: bool = True, parent=None):
         super().__init__(parent)
         self.left_doc, self.right_doc = left, right
         self.saved_lines = {"left": list(left.lines), "right": list(right.lines)}

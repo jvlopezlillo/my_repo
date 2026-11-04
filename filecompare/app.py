@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
         if b:
             self.open_text(Path(a), Path(b))
 
-    def open_text(self, left: Path, right: Path, ignore_ws: bool = False):
+    def open_text(self, left: Path, right: Path, ignore_ws: bool = True):
         left, right = Path(left), Path(right)
         for i in range(self.tabs.count()):
             w = self.tabs.widget(i)

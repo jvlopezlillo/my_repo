@@ -143,6 +143,8 @@ class FolderView(QWidget):
         self.ws_chk.setToolTip("Ignora diferencias de espacios en blanco y tabuladores (y fin de línea)")
         self.eol_chk = QCheckBox("Ignorar fin de línea")
         self.eol_chk.setToolTip("Trata LF y CRLF como iguales")
+        self.ws_chk.setChecked(True)  # activadas por defecto
+        self.eol_chk.setChecked(True)
         self.only_diff = QCheckBox("Sólo diferencias")
         self.confirm = QCheckBox("Confirmar al sobrescribir")
         self.confirm.setChecked(True)

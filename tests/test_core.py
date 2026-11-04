@@ -148,8 +148,9 @@ def test_diff_blocks_and_copy():
     b = ["1", "X", "Y", "3", "5", "6"]
     rows, blocks = compute_diff(a, b)
     assert [x.tag for x in blocks] == ["replace", "delete", "insert"]
-    assert len(rows) == 1 + 2 + 1 + 1 + 1 + 1
-    assert rows[blocks[0].row_start].left == "2"
+    # "2" no se parece a "X" ni a "Y": ya no se fuerza a compartir fila con ellas
+    assert len(rows) == 1 + 3 + 1 + 1 + 1 + 1
+    assert rows[blocks[0].row_start].left == "2" and rows[blocks[0].row_start].right is None
     assert rows[blocks[1].row_start].right is None  # relleno
 
     a2, b2 = list(a), list(b)
@@ -226,3 +227,109 @@ def test_refresh_path_matches_full_compare(tmp_path):
     assert _flat(root) == _flat(compare_dirs(L, R, ign))
     with pytest.raises(KeyError):
         refresh_path(root, "no/existe/x.txt", L, R, ign)
+
+
+MANIFEST_L = """{
+
+  "manifest_version": 2,
+  "name": "BetBurger Spit Wina Bet",
+  "version": "1.0",
+  "browser_specific_settings": {
+      "gecko": {
+          "id": "u3b6@ejemplo.com"
+      }
+  },
+  "description": "Agrega un borde rojo a todas las páginas web de mozilla.org.",
+
+  "icons": {
+    "48": "icons/border-48.png"
+  },
+  "permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.betburger.com/es/arbs*"],
+      "js": ["borderify-dos-canales.js"]
+    }
+  ]
+
+}""".split("\n")
+MANIFEST_R = """{
+    "manifest_version": 2,
+    "name": "8 - IkerBot",
+    "version": "1.0",
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "u3b8@ejemplo.com"
+        }
+    },
+    "description": "Agrega un borde rojo a todas las páginas web de mozilla.org.",
+
+    "icons": {
+        "48": "icons/border-48.png"
+    },
+    "permissions": ["https://api.telegram.org/*"],
+    "content_scripts": [
+        {
+            "matches": ["https://www.betburger.com/es/arbs*"],
+            "js": ["borderify-dos-canales.js"]
+        }
+    ]
+}""".split("\n")
+
+
+def _same_row(rows, left_part, right_part):
+    return any(r.left and r.right and left_part in r.left and right_part in r.right for r in rows)
+
+
+def test_alignment_by_similarity_and_blank_lines_not_anchors():
+    rows, blocks = compute_diff(MANIFEST_L, MANIFEST_R, ignore_ws=False)
+    # aunque la indentación difiera en todas las líneas, las equivalentes quedan a la misma altura
+    for key in ("manifest_version", '"name"', '"version"', "browser_specific_settings", "gecko", '"id"',
+                "description", '"icons"', '"48"', "permissions", "content_scripts", '"matches"', '"js"'):
+        assert _same_row(rows, key, key), key
+    # las llaves y corchetes (líneas sólo de símbolos) se emparejan aunque cambie la indentación
+    assert sum(1 for r in rows if r.left and r.right and r.left.strip() == "}" and r.right.strip() == "}") == 3
+    # y las líneas en blanco no arrastran a las demás: ninguna fila empareja "{" con una línea ajena
+    assert all(not (r.left == "{" and r.right != "{") for r in rows)
+    # ignorando espacios, la mayoría de líneas pasan a ser iguales: muchos menos bloques
+    _, blocks_ws = compute_diff(MANIFEST_L, MANIFEST_R, ignore_ws=True)
+    assert len(blocks_ws) < len(blocks) or len(blocks) <= 6
+    assert all(b.row_count <= 3 for b in blocks_ws)
+
+
+def test_blocks_are_consistent_with_rows():
+    import random
+    rnd = random.Random(1)
+    for _ in range(200):
+        a = [rnd.choice(["x", "y y", "", "foo bar", "}", "  z"]) for _ in range(rnd.randint(0, 12))]
+        b = [rnd.choice(["x", "y y", "", "foo baz", "]", "z"]) for _ in range(rnd.randint(0, 12))]
+        for ws in (False, True):
+            rows, blocks = compute_diff(a, b, ws)
+            assert [r.left for r in rows if r.left is not None] == a
+            assert [r.right for r in rows if r.right is not None] == b
+            for blk in blocks:
+                seg = rows[blk.row_start:blk.row_start + blk.row_count]
+                assert all(r.block == blk.index for r in seg)
+                assert [r.left for r in seg if r.left is not None] == a[blk.i1:blk.i2]
+                assert [r.right for r in seg if r.right is not None] == b[blk.j1:blk.j2]
+            # copiar todos los bloques deja los dos lados iguales
+            a2, b2 = list(a), list(b)
+            for blk in reversed(blocks):
+                apply_block(a2, b2, blk, "ltr")
+            assert ws or b2 == a  # (con ignore_ws, las líneas «iguales» pueden diferir en espacios)
+
+
+def test_diff_is_fast_on_large_inputs():
+    import time
+    a = [f"linea {i} valor {i * 3}" for i in range(3000)]
+    b = list(a)
+    for k in range(0, 3000, 7):
+        b[k] = b[k] + " cambiada"
+    t = time.perf_counter()
+    rows, blocks = compute_diff(a, b)
+    assert time.perf_counter() - t < 5
+    assert len(blocks) > 100
+    # zona enorme sin nada en común: debe usar el modo por posición y no bloquearse
+    t = time.perf_counter()
+    compute_diff([f"a{i} x" for i in range(1500)], [f"b{i} y" for i in range(1500)])
+    assert time.perf_counter() - t < 5

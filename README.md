@@ -25,16 +25,19 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
   ficheros se borrarán). Lo que coincida con los patrones de «Ignorar» ni se copia ni se borra.
 - Botones **✕** en cada lado eliminan el fichero o la carpeta de ese lado (siempre piden confirmación; es definitivo).
 - **Doble clic** en un fichero lo abre en una pestaña con los dos lados, izquierda y derecha.
-- Opciones: «Ignorar espacios» (espacios/tabuladores y fin de línea), «Ignorar fin de línea» (LF = CRLF),
+- Opciones (**activadas por defecto**): «Ignorar espacios» (espacios/tabuladores y fin de línea), «Ignorar fin de línea» (LF = CRLF),
   «Sólo diferencias» y patrones a ignorar (por defecto `.git, __pycache__`).
 
 ### Comparación de texto
 - Paneles **editables** y alineados, con numeración de líneas y bloques distintos resaltados
   (rojo: sólo izquierda, verde: sólo derecha, naranja: modificado). Dentro de las líneas modificadas se resaltan
   las palabras que cambian. Se puede teclear también en las filas grises de relleno.
+- **Alineación por parecido:** primero se buscan las líneas idénticas (sin contar las líneas en blanco, que no sirven de
+  ancla) y, entre ellas, las líneas se emparejan con la más parecida en vez de por posición. Lo que no se parece a nada
+  queda como «sólo a un lado».
 - Al dejar de teclear se recalcula la comparación. En el canal central, cada bloque tiene flechas **→ / ←**
   para copiarlo en cualquier sentido.
-- Deshacer/Rehacer (Ctrl+Z / Ctrl+Y), siguiente/anterior diferencia (F8 / Shift+F8), «Ignorar espacios»
+- Deshacer/Rehacer (Ctrl+Z / Ctrl+Y), siguiente/anterior diferencia (F8 / Shift+F8), «Ignorar espacios» (activada por defecto)
   y guardado independiente de cada lado (**Ctrl+1** izquierda, **Ctrl+2** derecha).
 - Se conservan codificación (UTF-8, UTF-8 con BOM, UTF-16, Latin-1), saltos de línea (LF/CRLF) y el salto final.
 - Los ficheros binarios se detectan y no se muestran.
