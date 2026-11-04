@@ -43,7 +43,7 @@ def _fmt_size(n: int) -> str:
 
 def _info(path: Optional[Path], kind: Optional[str]) -> str:
     if path is None:
-        return "—"
+        return ""
     try:
         st = path.stat()
     except OSError:

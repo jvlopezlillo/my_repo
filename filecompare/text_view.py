@@ -344,9 +344,12 @@ class TextDiffView(QWidget):
 
         for s in SIDES:
             d = self._doc(s)
-            changed = "● " if d.lines != self.saved_lines[s] else ""
-            note = "" if d.exists else "  (no existe: se creará al guardar)"
-            self.labels[s].setText(f"{changed}{d.path}{note}")
+            modified = d.lines != self.saved_lines[s]
+            # un lado sin fichero se deja vacío hasta que tenga contenido
+            if not d.exists and not modified:
+                self.labels[s].setText("")
+            else:
+                self.labels[s].setText(f"{'● ' if modified else ''}{d.path}")
             self.labels[s].setToolTip(str(d.path))
         n = len(self.blocks)
         self.info.setText("  Los ficheros son idénticos" if n == 0 else f"  {n} bloque(s) distinto(s)")
