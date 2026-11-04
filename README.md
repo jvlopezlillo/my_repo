@@ -39,7 +39,7 @@ pip install -r requirements.txt pyinstaller
 ```
 
 La acción de GitHub *Build Gitree* (pestaña Actions → Run workflow, o al subir un tag `v*`) compila el binario y lo
-deja como artefacto `gitree-linux-x86_64`; con un tag también lo adjunta a la release. Requiere `git` instalado en el sistema.
+deja como artefacto `gitree-linux-x86_64`; con un tag también lo adjunta a la release. Requiere `git` instalado en el sistema. Si al ejecutarlo en Debian/Ubuntu aparece un error sobre `xcb-cursor0`, instala `sudo apt install libxcb-cursor0`.
 
 ## Limitaciones conocidas
 
