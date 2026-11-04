@@ -4,12 +4,13 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QListWidget,
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
                                QSplitter, QVBoxLayout, QWidget)
 
 from .diffview import DiffView
+from .filemenu import FileTools
 from .git import FileStatus, GitError, Repo
 from .theme import status_badge
 
@@ -104,6 +105,7 @@ class WorkspaceView(QWidget):
     def __init__(self, repo: Repo):
         super().__init__()
         self.repo = repo
+        self.tools = FileTools(repo, self)
         self._current: tuple[FileStatus, bool] | None = None
 
         self.staged = FileList(True)
@@ -263,25 +265,87 @@ class WorkspaceView(QWidget):
     def _menu(self, files: list[FileStatus], pos, staged: bool) -> None:
         if not files:
             return
+        paths = [f.path for f in files]
+        one = len(files) == 1
+        f0 = files[0]
+        tracked = not all(f.untracked for f in files)
+        conflicted = any(f.conflicted for f in files)
+        t = self.tools
         m = QMenu(self)
-        if staged:
-            m.addAction("Quitar del stage").triggered.connect(lambda: self._toggle(files, False))
-        else:
-            m.addAction("Añadir al stage").triggered.connect(lambda: self._toggle(files, True))
-            m.addAction("Descartar cambios…").triggered.connect(lambda: self._discard(files))
-            if any(f.conflicted for f in files):
-                m.addSeparator()
-                m.addAction("Resolver usando «nuestra» versión").triggered.connect(
-                    lambda: self._resolve(files, "ours"))
-                m.addAction("Resolver usando «su» versión").triggered.connect(
-                    lambda: self._resolve(files, "theirs"))
-            if any(f.untracked for f in files):
-                m.addSeparator()
-                m.addAction("Ignorar").triggered.connect(lambda: self._ignore(files))
+
+        def act(menu, text, fn, enabled=True):
+            a = menu.addAction(text)
+            a.setEnabled(enabled)
+            a.triggered.connect(lambda _=False: fn())
+            return a
+
+        act(m, "Abrir", lambda: t.open(paths))
+        act(m, "Mostrar en el gestor de ficheros", lambda: t.show_in_folder(paths))
+        act(m, "Copiar ruta al portapapeles", lambda: t.copy_paths(paths))
         m.addSeparator()
-        m.addAction("Copiar ruta").triggered.connect(
-            lambda: QGuiApplication.clipboard().setText("\n".join(f.path for f in files)))
+        diff_args = (["--cached", "--", f0.path] if staged else ["--", f0.path])
+        act(m, "Diff externo", lambda: t.external_diff(diff_args),
+            one and not f0.untracked and not f0.conflicted)
+        m.addSeparator()
+        if staged:
+            act(m, "Quitar del stage", lambda: self._toggle(files, False))
+        else:
+            act(m, "Añadir al stage", lambda: self._toggle(files, True))
+        act(m, "Eliminar…", lambda: self._remove(files))
+        act(m, "Descartar cambios…", lambda: self._discard(files), not staged)
+        ign = m.addMenu("Ignorar")
+        ign.setEnabled(not staged and not tracked)
+        act(ign, f"Este fichero ({f0.path})", lambda: self._ignore(files, "file"))
+        ext = os.path.splitext(f0.path)[1]
+        act(ign, f"Todos los ficheros «*{ext}»", lambda: self._ignore(files, "ext"), bool(ext))
+        folder = os.path.dirname(f0.path)
+        act(ign, f"Todo el directorio ({folder}/)", lambda: self._ignore(files, "dir"), bool(folder))
+        act(m, "Dejar de seguir (mantiene el fichero)", lambda: self._untrack(files), tracked)
+        act(m, "Commit solo de estos ficheros…", lambda: self._commit_selected(files), not conflicted)
+        m.addSeparator()
+        res = m.addMenu("Resolver conflictos")
+        res.setEnabled(conflicted)
+        act(res, "Resolver usando «nuestra» versión", lambda: self._resolve(files, "ours"))
+        act(res, "Resolver usando «su» versión", lambda: self._resolve(files, "theirs"))
+        act(res, "Marcar como resuelto", lambda: self._toggle(files, True))
+        m.addSeparator()
+        act(m, "Historial del fichero…", lambda: t.log(f0.path), one and not f0.untracked)
+        act(m, "Blame del fichero…", lambda: t.blame(f0.path), one and not f0.untracked)
         m.exec(pos)
+
+    def _remove(self, files: list[FileStatus]) -> None:
+        names = "\n".join(f.path for f in files[:8]) + ("\n…" if len(files) > 8 else "")
+        if QMessageBox.warning(self, "Eliminar ficheros",
+                               f"Se eliminarán del disco y del control de versiones:\n\n{names}",
+                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                               QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            for f in files:
+                self.repo.remove(f)
+        except GitError as e:
+            QMessageBox.critical(self, "Error", str(e))
+        self.changed.emit()
+
+    def _untrack(self, files: list[FileStatus]) -> None:
+        try:
+            for f in files:
+                if not f.untracked:
+                    self.repo.untrack(f.path)
+        except GitError as e:
+            QMessageBox.critical(self, "Error", str(e))
+        self.changed.emit()
+
+    def _commit_selected(self, files: list[FileStatus]) -> None:
+        msg, ok = QInputDialog.getMultiLineText(
+            self, "Commit", f"Mensaje del commit ({len(files)} fichero{'s' if len(files) != 1 else ''}):")
+        if not (ok and msg.strip()):
+            return
+        try:
+            self.repo.commit_paths(msg, [f.path for f in files])
+        except GitError as e:
+            QMessageBox.critical(self, "No se pudo hacer commit", str(e))
+        self.changed.emit()
 
     def _discard(self, files: list[FileStatus]) -> None:
         names = "\n".join(f.path for f in files[:8]) + ("\n…" if len(files) > 8 else "")
@@ -306,9 +370,15 @@ class WorkspaceView(QWidget):
             QMessageBox.critical(self, "Error", str(e))
         self.changed.emit()
 
-    def _ignore(self, files: list[FileStatus]) -> None:
+    def _ignore(self, files: list[FileStatus], mode: str = "file") -> None:
         for f in files:
-            self.repo.add_to_gitignore("/" + f.path)
+            if mode == "ext" and os.path.splitext(f.path)[1]:
+                pattern = "*" + os.path.splitext(f.path)[1]
+            elif mode == "dir" and os.path.dirname(f.path):
+                pattern = "/" + os.path.dirname(f.path) + "/"
+            else:
+                pattern = "/" + f.path
+            self.repo.add_to_gitignore(pattern)
         self.changed.emit()
 
     def _abort_merge(self) -> None:

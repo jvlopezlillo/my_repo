@@ -115,3 +115,28 @@ def test_graph_single_root_commit():
     from gitree.git import Commit
     rows, lanes = build_graph([Commit("a" * 40, [], "A", "a@a", 0, "root")])
     assert lanes == 1 and rows[0].col == 0
+
+
+def test_file_tools_git(repo):
+    write(repo, "a.txt", "uno\n"); write(repo, "b.txt", "b\n")
+    repo.stage(["a.txt", "b.txt"]); repo.commit("c1")
+    write(repo, "a.txt", "uno\ndos\n"); repo.stage(["a.txt"]); repo.commit("c2")
+    assert [x[3] for x in repo.file_log("a.txt")] == ["c2", "c1"]
+    assert "+dos" in repo.file_commit_diff(repo.file_log("a.txt")[0][0], "a.txt")
+    assert "dos" in repo.blame("a.txt")
+    # commit solo de un fichero aunque haya otro en stage
+    write(repo, "a.txt", "tres\n"); write(repo, "b.txt", "bb\n")
+    repo.stage(["b.txt"])
+    repo.commit_paths("solo a", ["a.txt"])
+    st = {f.path: f for f in repo.status()}
+    assert "a.txt" not in st and st["b.txt"].staged
+    # dejar de seguir / eliminar
+    repo.untrack("b.txt")
+    assert {f.path: f for f in repo.status()}["b.txt"].untracked
+    entries = [f for f in repo.status() if f.path == "b.txt"]
+    assert len(entries) == 2  # borrado en stage + sin seguimiento
+    for f in entries:
+        repo.remove(f)
+    assert not os.path.exists(os.path.join(repo.path, "b.txt"))
+    repo.add_to_gitignore("*.log"); repo.add_to_gitignore("*.log")
+    assert open(os.path.join(repo.path, ".gitignore")).read().count("*.log") == 1

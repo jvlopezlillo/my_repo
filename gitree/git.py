@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 
@@ -310,6 +311,60 @@ class Repo:
         if reverse:
             args.append("-R")
         self.run(*args, "-", input=patch)
+
+    def remove(self, fs: FileStatus) -> None:
+        """Elimina el fichero del disco (y del índice si estaba versionado)."""
+        if self.run("ls-files", "--", fs.path).strip():
+            self.run("rm", "-f", "--", fs.path)
+        else:  # sin seguimiento (o ya borrado del índice): basta con borrarlo del disco
+            self.run("clean", "-fq", "--", fs.path)
+
+    def untrack(self, path: str) -> None:
+        """Deja de versionar el fichero pero lo conserva en disco."""
+        self.run("rm", "--cached", "-r", "-q", "--", path)
+
+    def commit_paths(self, message: str, paths: list[str]) -> None:
+        """Commit que incluye solo estos ficheros (aunque haya otros en stage)."""
+        self.run("add", "-A", "--", *paths)
+        self.run("commit", "-F", "-", "--", *paths, input=message)
+
+    def file_log(self, path: str, limit: int = 500) -> list[tuple[str, str, int, str]]:
+        fmt = _FS.join(["%H", "%an", "%at", "%s"]) + _RS
+        out = self.run("log", f"-n{limit}", f"--format={fmt}", "--", path, check=False)
+        res = []
+        for rec in out.split(_RS):
+            rec = rec.strip("\n")
+            if rec:
+                h, an, at, subj = rec.split(_FS, 3)
+                res.append((h, an, int(at or 0), subj))
+        return res
+
+    def file_commit_diff(self, rev: str, path: str) -> str:
+        return self.run("show", "--format=", "-M", rev, "--", path, check=False)
+
+    def blame(self, path: str, rev: str | None = None) -> str:
+        args = ["blame", "-w", "--date=short"]
+        if rev:
+            args.append(rev)
+        return self.run(*args, "--", path)
+
+    def diff_tool(self) -> tuple[str | None, bool]:
+        """(herramienta, está_configurada_en_git)"""
+        tool = self.run("config", "diff.tool", check=False).strip()
+        if tool:
+            return tool, True
+        for cand in ("meld", "kdiff3", "kompare", "xxdiff"):
+            if shutil.which(cand):
+                return cand, False
+        return None, False
+
+    def external_diff(self, args: list[str]) -> None:
+        tool, configured = self.diff_tool()
+        if not tool:
+            raise GitError("No hay ninguna herramienta de diff externa.\n\nInstala una (por ejemplo «meld») "
+                           "o configúrala con:\n  git config --global diff.tool <herramienta>")
+        cmd = ["git", "-C", self.path, "difftool", "-y"] + ([] if configured else ["-t", tool]) + args
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
     def add_to_gitignore(self, pattern: str) -> None:
         p = os.path.join(self.path, ".gitignore")

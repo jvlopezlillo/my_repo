@@ -14,6 +14,7 @@ Cliente Git gráfico para **Linux** inspirado en Sourcetree (Python + Qt/PySide6
   Menú contextual: checkout, crear rama/etiqueta, cherry-pick, revert, reset (soft/mixed/hard), copiar hash.
 - **Estado de ficheros**: stage/unstage con casillas, diff coloreado, **stage/unstage/descartar por hunk** (clic derecho en el diff),
   descartar, ignorar, resolver conflictos (ours/theirs), amend, «push al confirmar» y aviso de merge en curso.
+- **Menú contextual de ficheros** (clic derecho) como en Sourcetree: abrir, mostrar en el gestor, copiar ruta, diff externo (meld/kdiff3 o el configurado en `diff.tool`), añadir/quitar del stage, eliminar, descartar, ignorar (fichero, extensión o directorio), dejar de seguir, commit solo de esos ficheros, resolver conflictos, historial y *blame* del fichero. En el detalle de un commit hay una versión reducida.
 - **Barra de herramientas**: Commit, Checkout, Descartar, Stash, Fetch, Pull, Push, Rama, Merge, Etiqueta, Terminal, Carpeta.
   Fetch/Pull/Push/Clone corren en segundo plano.
 - Se refresca solo al volver a la ventana (y con `F5`).

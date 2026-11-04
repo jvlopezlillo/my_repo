@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QHeade
                                QTableView, QTextBrowser, QVBoxLayout, QWidget)
 
 from .diffview import DiffView
+from .filemenu import FileTools
 from .git import Commit, Repo
 from .graph import GraphRow, build_graph
 from .theme import LANE_COLORS, status_badge
@@ -172,6 +173,7 @@ class HistoryView(QWidget):
         super().__init__()
         self.repo = repo
         self._files: list[tuple[str, str, str | None]] = []
+        self.tools = FileTools(repo, self)
         self._wip_count = 0
         self.wip_selected = False
 
@@ -237,6 +239,8 @@ class HistoryView(QWidget):
         self.table.selectionModel().currentRowChanged.connect(self._on_commit_selected)
         self.table.customContextMenuRequested.connect(self._menu)
         self.files.currentRowChanged.connect(self._on_file_selected)
+        self.files.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.files.customContextMenuRequested.connect(self._files_menu)
         self.info.anchorClicked.connect(lambda url: self.select_hash(url.toString()))
         self.all_branches.toggled.connect(lambda _: self.reload())
         self.search.returnPressed.connect(self._find_next)
@@ -350,6 +354,27 @@ class HistoryView(QWidget):
         self.diff.show_diff(self.repo.commit_file_diff(c, path, orig), "commit")
 
     # ------------------------------------------------------- menú contextual
+    def _files_menu(self, pos) -> None:
+        c, row = self.selected_commit(), self.files.currentRow()
+        if not c or row < 0 or row >= len(self._files):
+            return
+        st, path, _orig = self._files[row]
+        t = self.tools
+        m = QMenu(self)
+        m.addAction("Abrir").triggered.connect(lambda: t.open([path]))
+        m.addAction("Mostrar en el gestor de ficheros").triggered.connect(lambda: t.show_in_folder([path]))
+        m.addAction("Copiar ruta al portapapeles").triggered.connect(lambda: t.copy_paths([path]))
+        m.addSeparator()
+        a = m.addAction("Diff externo")
+        a.setEnabled(bool(c.parents))
+        a.triggered.connect(lambda: t.external_diff([c.parents[0], c.hash, "--", path]))
+        m.addSeparator()
+        m.addAction("Historial del fichero…").triggered.connect(lambda: t.log(path))
+        b = m.addAction("Blame del fichero en este commit…")
+        b.setEnabled(st != "D")
+        b.triggered.connect(lambda: t.blame(path, c.hash))
+        m.exec(self.files.viewport().mapToGlobal(pos))
+
     def _menu(self, pos) -> None:
         c = self.selected_commit()
         if not c:
