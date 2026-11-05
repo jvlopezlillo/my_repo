@@ -34,11 +34,11 @@ def test_full_flow(app, tmp_path):
     sh(tmp_path, "git", "init", "-q", "--bare", "--initial-branch=main", bare)
     work = str(tmp_path / "w")
     repo = Repo.init(work)
-    for k, v in (("user.name", "T"), ("user.email", "t@t")):
+    for k, v in (("user.name", "T"), ("user.email", "t@t"), ("core.autocrlf", "false")):
         sh(work, "git", "config", k, v)
     sh(work, "git", "checkout", "-q", "-b", "main")
     repo.add_remote("origin", bare)
-    with open(os.path.join(work, "f.txt"), "w") as fh:
+    with open(os.path.join(work, "f.txt"), "w", newline="\n") as fh:
         fh.write("".join(f"l{i}\n" for i in range(30)))
 
     win = MainWindow()
@@ -59,7 +59,7 @@ def test_full_flow(app, tmp_path):
     # stage por hunk
     lines = [f"l{i}\n" for i in range(30)]
     lines[1], lines[28] = "X\n", "Y\n"
-    with open(os.path.join(work, "f.txt"), "w") as fh:
+    with open(os.path.join(work, "f.txt"), "w", newline="\n") as fh:
         fh.writelines(lines)
     rv.refresh()
     ws.unstaged.setCurrentRow(0)

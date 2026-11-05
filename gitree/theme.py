@@ -53,6 +53,15 @@ QLineEdit { border: 1px solid #b7bfcc; border-radius: 4px; padding: 3px 6px; bac
 """
 
 
+def _symbol_font(pixel_size: int, bold: bool = False) -> QFont:
+    """Fuente con respaldo para los símbolos Unicode (DejaVu en Linux, Segoe UI Symbol en Windows)."""
+    f = QFont()
+    f.setFamilies(["DejaVu Sans", "Segoe UI Symbol", "Segoe UI", "Noto Sans Symbols2", "Arial Unicode MS"])
+    f.setPixelSize(pixel_size)
+    f.setBold(bold)
+    return f
+
+
 def _pixmap(size: int, dpr: int = 2) -> QPixmap:
     pm = QPixmap(size * dpr, size * dpr)
     pm.setDevicePixelRatio(dpr)
@@ -65,8 +74,7 @@ def glyph_icon(glyph: str, color: str = BLUE, size: int = 28) -> QIcon:
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-    font = QFont("DejaVu Sans")
-    font.setPixelSize(int(size * 0.78))
+    font = _symbol_font(int(size * 0.78))
     p.setFont(font)
     p.setPen(QColor(color))
     p.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, glyph)
@@ -96,9 +104,7 @@ def status_badge(letter: str) -> QIcon:
         p.setBrush(QColor(STATUS_COLORS.get(letter, "#7f8c8d")))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(1, 1, size - 2, size - 2), 3, 3)
-        f = QFont("DejaVu Sans")
-        f.setPixelSize(11)
-        f.setBold(True)
+        f = _symbol_font(11, bold=True)
         p.setFont(f)
         p.setPen(QColor("white"))
         p.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, letter if letter != "?" else "+")

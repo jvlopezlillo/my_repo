@@ -19,12 +19,13 @@ def repo(tmp_path):
     r = Repo.init(p)
     sh(p, "git", "config", "user.name", "T")
     sh(p, "git", "config", "user.email", "t@t")
+    sh(p, "git", "config", "core.autocrlf", "false")
     sh(p, "git", "checkout", "-q", "-b", "main")
     return r
 
 
 def write(repo, name, text):
-    with open(os.path.join(repo.path, name), "w") as fh:
+    with open(os.path.join(repo.path, name), "w", newline="\n") as fh:
         fh.write(text)
 
 

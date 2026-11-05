@@ -32,3 +32,35 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: gitree-linux-x86_64.tar.gz
+
+  windows-binary:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: git config --global core.autocrlf false
+      - run: pip install -r requirements.txt pyinstaller pytest
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests
+      - name: Compilar
+        env:
+          PYTHON: python
+        run: bash build.sh --windowed
+      - name: Renombrar
+        run: cp dist/gitree.exe gitree-windows-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gitree-windows-x64
+          path: gitree-windows-x64.exe
+      - name: Adjuntar a la release (solo en tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gitree-windows-x64.exe

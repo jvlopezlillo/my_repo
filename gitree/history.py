@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMenu, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
                                QTableView, QTextBrowser, QVBoxLayout, QWidget)
@@ -63,7 +63,7 @@ class CommitModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole and col == 1:
             return f"{c.subject}\n\n{c.author} <{c.email}>"
         if role == Qt.ItemDataRole.FontRole and col == 4:
-            f = QFont("DejaVu Sans Mono")
+            f = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
             f.setPointSize(9)
             return f
 

@@ -43,6 +43,14 @@ pip install -r requirements.txt pyinstaller
 La acción de GitHub *Build Gitree* (pestaña Actions → Run workflow, o al subir un tag `v*`) compila el binario y lo
 deja como artefacto `gitree-linux-x86_64`; con un tag también lo adjunta a la release. Requiere `git` instalado en el sistema. Si al ejecutarlo en Debian/Ubuntu aparece un error sobre `xcb-cursor0`, instala `sudo apt install libxcb-cursor0`.
 
+## Windows
+
+La Action *Build Gitree* también genera `gitree-windows-x64.exe` (artefacto `gitree-windows-x64`). Es un único `.exe` sin consola.
+Requisitos: tener **Git for Windows** instalado (`winget install Git.Git`). Como no está firmado, SmartScreen puede avisar
+la primera vez («Más información → Ejecutar de todos modos»).
+
+Desde el código: `pip install -r requirements.txt pyinstaller` y, en Git Bash, `PYTHON=python bash build.sh --windowed`.
+
 ## Limitaciones conocidas
 
 - Para remotos HTTPS se necesita un *credential helper* configurado (no hay diálogo de contraseña); SSH con agente funciona.

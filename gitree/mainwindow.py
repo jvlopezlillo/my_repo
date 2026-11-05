@@ -4,8 +4,8 @@ import os
 import shutil
 import subprocess
 
-from PySide6.QtCore import QEvent, QSettings, QTimer, Qt, QThreadPool
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QEvent, QSettings, QThreadPool, QTimer, QUrl, Qt
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
                                QMainWindow, QMessageBox, QPushButton, QTabBar, QTabWidget, QToolBar,
                                QToolButton, QWidget)
@@ -267,6 +267,12 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------- sistema
     def _terminal(self, rv: RepoView):
         path = rv.repo.path
+        if os.name == "nt":
+            if shutil.which("wt"):  # Windows Terminal
+                subprocess.Popen(["wt", "-d", path])
+            else:
+                subprocess.Popen(["cmd.exe"], cwd=path, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            return
         for term, args in (("x-terminal-emulator", []), ("gnome-terminal", ["--working-directory", path]),
                            ("konsole", ["--workdir", path]), ("xfce4-terminal", ["--working-directory", path]),
                            ("kitty", ["--directory", path]), ("alacritty", ["--working-directory", path]),
@@ -277,8 +283,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Terminal", "No se encontró ningún emulador de terminal.")
 
     def _open_folder(self, rv: RepoView):
-        if shutil.which("xdg-open"):
-            subprocess.Popen(["xdg-open", rv.repo.path])
+        QDesktopServices.openUrl(QUrl.fromLocalFile(rv.repo.path))
 
     def _refresh_current(self):
         rv = self.current_repo_view()

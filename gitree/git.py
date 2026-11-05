@@ -7,6 +7,8 @@ import subprocess
 from dataclasses import dataclass, field
 
 _FS = "\x1f"
+# En Windows, evita que cada llamada a git abra (y cierre) una ventana de consola
+_POPEN_KW: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 _RS = "\x1e"
 
 
@@ -98,7 +100,7 @@ class Repo:
         try:
             out = subprocess.run(
                 ["git", "-C", path, "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, **_POPEN_KW,
             )
         except FileNotFoundError as e:
             raise GitError("No se encontró el ejecutable «git». Instálalo primero.") from e
@@ -109,7 +111,7 @@ class Repo:
     @staticmethod
     def init(path: str) -> "Repo":
         os.makedirs(path, exist_ok=True)
-        r = subprocess.run(["git", "-C", path, "init"], capture_output=True, text=True)
+        r = subprocess.run(["git", "-C", path, "init"], capture_output=True, text=True, **_POPEN_KW)
         if r.returncode != 0:
             raise GitError(r.stderr.strip())
         return Repo.discover(path)
@@ -117,7 +119,7 @@ class Repo:
     @staticmethod
     def clone(url: str, dest: str) -> "Repo":
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        r = subprocess.run(["git", "clone", url, dest], capture_output=True, text=True, env=env)
+        r = subprocess.run(["git", "clone", url, dest], capture_output=True, text=True, env=env, **_POPEN_KW)
         if r.returncode != 0:
             raise GitError(r.stderr.strip() or r.stdout.strip())
         return Repo.discover(dest)
@@ -128,7 +130,7 @@ class Repo:
         proc = subprocess.run(
             ["git", "-C", self.path, *args],
             input=input.encode() if input is not None else None,
-            capture_output=True, env=env,
+            capture_output=True, env=env, **_POPEN_KW,
         )
         out = proc.stdout.decode("utf-8", "replace")
         if check and proc.returncode != 0:
@@ -353,7 +355,7 @@ class Repo:
         tool = self.run("config", "diff.tool", check=False).strip()
         if tool:
             return tool, True
-        for cand in ("meld", "kdiff3", "kompare", "xxdiff"):
+        for cand in ("meld", "kdiff3", "winmerge", "kompare", "xxdiff"):
             if shutil.which(cand):
                 return cand, False
         return None, False
@@ -364,7 +366,8 @@ class Repo:
             raise GitError("No hay ninguna herramienta de diff externa.\n\nInstala una (por ejemplo «meld») "
                            "o configúrala con:\n  git config --global diff.tool <herramienta>")
         cmd = ["git", "-C", self.path, "difftool", "-y"] + ([] if configured else ["-t", tool]) + args
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        extra = _POPEN_KW if os.name == "nt" else {"start_new_session": True}
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **extra)
 
     def add_to_gitignore(self, pattern: str) -> None:
         p = os.path.join(self.path, ".gitignore")
