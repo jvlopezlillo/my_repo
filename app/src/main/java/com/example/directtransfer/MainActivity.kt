@@ -66,6 +66,7 @@ class MainActivity : ComponentActivity() {
         }
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
         else add(Manifest.permission.ACCESS_FINE_LOCATION) // Wi-Fi Direct en Android <= 12
+        if (Build.VERSION.SDK_INT <= 28) add(Manifest.permission.WRITE_EXTERNAL_STORAGE) // guardar en Descargas
     }.distinct()
 
     private fun withPermissions(action: () -> Unit) {
@@ -79,8 +80,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notificationLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* opcional */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Para ver el progreso y los botones Aceptar/Rechazar en segundo plano (Android 13+). No es obligatorio.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) { App() }
@@ -92,7 +100,10 @@ class MainActivity : ComponentActivity() {
     private fun App() {
         val state by vm.state.collectAsStateWithLifecycle()
         LocalView.current.let { v -> SideEffect { v.keepScreenOn = state.busy } }
-        BackHandler(enabled = state.screen != Screen.HOME) { vm.goHome() }
+        // Mientras hay una transferencia, Atrás solo la pasa a segundo plano (sigue en el servicio).
+        BackHandler(enabled = state.screen != Screen.HOME || state.busy) {
+            if (state.busy) moveTaskToBack(true) else vm.goHome()
+        }
 
         Scaffold { padding ->
             Column(Modifier.padding(padding).padding(16.dp).fillMaxSize()) {
@@ -110,6 +121,7 @@ class MainActivity : ComponentActivity() {
                 title = { Text("Transferencia entrante") },
                 text = {
                     Text("«${req.senderName}» quiere enviarte ${req.fileCount} archivo(s) (${formatBytes(req.totalBytes)}).\n\n" +
+                        (if (req.resumeBytes > 0) "Se reanudará una transferencia anterior: ya tienes ${formatBytes(req.resumeBytes)}.\n\n" else "") +
                         "Se guardarán en Descargas/${FileReceiver.RECEIVE_DIR}.")
                 },
                 confirmButton = { TextButton(onClick = { vm.answerRequest(true) }) { Text("Aceptar") } },
@@ -181,6 +193,11 @@ class MainActivity : ComponentActivity() {
             style = MaterialTheme.typography.bodySmall,
         )
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
+        if (state.canResume) {
+            Button(onClick = { withPermissions { vm.resumeSend() } }, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Reanudar envío")
+            }
+        }
         if (state.status.isNotEmpty()) Text(state.status, modifier = Modifier.padding(top = 8.dp))
         Spacer(Modifier.height(12.dp))
 

@@ -20,7 +20,9 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.os.Build
 import android.os.ParcelUuid
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.IOException
@@ -35,7 +37,7 @@ data class DiscoveredDevice(val address: String, val name: String, val device: B
  */
 @SuppressLint("MissingPermission")
 class BleHost(private val ctx: Context) {
-    private val manager = ctx.getSystemService(BluetoothManager::class.java)
+    private val manager = ContextCompat.getSystemService(ctx, BluetoothManager::class.java)
     private var server: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var advCallback: AdvertiseCallback? = null
@@ -115,7 +117,7 @@ class BleHost(private val ctx: Context) {
 /** Lado EMISOR: busca receptores anunciándose por BLE. */
 @SuppressLint("MissingPermission")
 class BleScanner(ctx: Context, private val onResult: (DiscoveredDevice) -> Unit) {
-    private val manager = ctx.getSystemService(BluetoothManager::class.java)
+    private val manager = ContextCompat.getSystemService(ctx, BluetoothManager::class.java)
     private var scanner: BluetoothLeScanner? = null
     private val callback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -189,6 +191,7 @@ suspend fun readLinkInfo(ctx: Context, device: BluetoothDevice): String =
                 else fail(g, "Error de lectura BLE ($status)")
             }
         }
-        gatt = device.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
+        gatt = if (Build.VERSION.SDK_INT >= 23) device.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
+        else device.connectGatt(ctx, false, cb)
         cont.invokeOnCancellation { runCatching { gatt?.close() } }
     }

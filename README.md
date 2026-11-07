@@ -16,10 +16,13 @@ Los ficheros se guardan en `Descargas/DirectTransfer/` conservando la estructura
 
 ## Requisitos
 
-- Android 10 (API 29) o superior, con Bluetooth LE y Wi‑Fi Direct.
+- Android 5.0 (API 21) o superior, con Bluetooth LE y Wi‑Fi Direct. El receptor debe poder anunciarse por BLE
+  (algunos móviles muy antiguos no pueden; ahí solo podrán actuar de emisor).
 - Bluetooth y Wi‑Fi **activados** en ambos (el Wi‑Fi no necesita estar conectado a ninguna red).
 - Concede los permisos de «Dispositivos cercanos» (Android 12+/13+) o ubicación (Android ≤ 12).
-- La app debe estar abierta en primer plano en ambos dispositivos durante la transferencia.
+- Las transferencias siguen en **segundo plano** gracias a un servicio en primer plano (notificación con progreso,
+  y botones Aceptar/Rechazar/Cancelar). En Android 13+ conviene conceder el permiso de notificaciones.
+- En Android 6–11 el sistema exige además tener la **ubicación activada** para escanear BLE / Wi‑Fi Direct.
 
 ## Compilar
 
@@ -29,8 +32,14 @@ Los ficheros se guardan en `Descargas/DirectTransfer/` conservando la estructura
 
 También hay un workflow de GitHub Actions (`.github/workflows/android.yml`) que compila el APK y lo sube como artefacto.
 
+## Reanudación
+
+Si la transferencia se corta, el receptor conserva lo recibido (en `Android/data/<app>/files/incoming/`, se borra
+a los 7 días) y sigue esperando. En el emisor aparece **Reanudar envío**; si la app se reinició, basta con
+volver a elegir los mismos archivos y el mismo dispositivo. La transferencia se identifica por rutas + tamaños,
+así que solo continúa si los archivos no han cambiado de tamaño. Lo ya enviado no se repite.
+
 ## Limitaciones conocidas
 
 - Las carpetas vacías no se transfieren (solo ficheros).
-- No hay reanudación de transferencias interrumpidas.
 - Al unirse a la red del receptor, Android muestra un diálogo de confirmación en el emisor (obligatorio por el sistema).

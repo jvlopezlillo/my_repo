@@ -15,7 +15,7 @@ object Protocol {
     val LINK_CHAR_UUID: UUID = UUID.fromString("7d1f0002-5b0e-4c1a-9c55-3f6a2d9e1b10")
 
     const val TCP_PORT = 8988
-    const val MAGIC = 0x44545231 // "DTR1"
+    const val MAGIC = 0x44545232 // "DTR2" (protocolo con reanudación)
     const val BUFFER_SIZE = 256 * 1024
     const val DEFAULT_GROUP_OWNER_IP = "192.168.49.1"
 
@@ -52,7 +52,13 @@ data class LinkInfo(
 /** Un fichero a enviar. [relativePath] conserva la estructura de carpetas ("dir/sub/a.txt"). */
 data class SendItem(val uri: Uri, val relativePath: String, val size: Long)
 
-data class IncomingRequest(val senderName: String, val fileCount: Int, val totalBytes: Long)
+data class IncomingRequest(
+    val senderName: String,
+    val fileCount: Int,
+    val totalBytes: Long,
+    /** Bytes que ya se tienen de un intento anterior (reanudación). */
+    val resumeBytes: Long = 0,
+)
 
 data class Progress(
     val fileName: String = "",
@@ -73,10 +79,12 @@ class ProgressTracker(
     private val fileCount: Int,
     private val totalBytes: Long,
     private val emit: (Progress) -> Unit,
+    initialBytes: Long = 0,
 ) {
     private val start = SystemClock.elapsedRealtime()
+    private val initial = initialBytes
     private var lastEmit = 0L
-    private var done = 0L
+    private var done = initialBytes
     private var fileName = ""
     private var fileIndex = 0
 
@@ -98,7 +106,7 @@ class ProgressTracker(
         if (!force && now - lastEmit < 100) return
         lastEmit = now
         val elapsed = (now - start).coerceAtLeast(1)
-        emit(Progress(fileName, fileIndex, fileCount, done, totalBytes, done * 1000 / elapsed))
+        emit(Progress(fileName, fileIndex, fileCount, done, totalBytes, (done - initial) * 1000 / elapsed))
     }
 }
 
