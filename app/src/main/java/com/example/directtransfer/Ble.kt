@@ -51,7 +51,7 @@ class BleHost(private val ctx: Context) {
             ?: throw IOException("Este dispositivo no puede anunciarse por Bluetooth LE")
 
         val serviceAdded = CompletableDeferred<Unit>()
-        val srv = manager.openGattServer(ctx, object : BluetoothGattServerCallback() {
+        val srv = manager?.openGattServer(ctx, object : BluetoothGattServerCallback() {
             override fun onServiceAdded(status: Int, service: BluetoothGattService) {
                 if (status == android.bluetooth.BluetoothGatt.GATT_SUCCESS) serviceAdded.complete(Unit)
                 else serviceAdded.completeExceptionally(IOException("No se pudo registrar el servicio BLE ($status)"))
