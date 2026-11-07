@@ -1,11 +1,14 @@
 package com.example.directtransfer
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +65,14 @@ class TransferEngine private constructor(private val app: Application) {
     private val deviceName: String
         get() = Settings.Global.getString(app.contentResolver, "device_name") ?: Build.MODEL
 
+    /** Android 6-12 exige que la ubicación del sistema esté activada para escanear BLE / usar Wi-Fi Direct. */
+    private fun locationProblem(): String? {
+        if (Build.VERSION.SDK_INT !in 23..32) return null
+        val lm = app.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        return if (LocationManagerCompat.isLocationEnabled(lm)) null
+        else "Activa la ubicación del móvil (ajustes rápidos). Android la exige para encontrar dispositivos cercanos; la app no la usa."
+    }
+
     private fun startService() {
         runCatching { ContextCompat.startForegroundService(app, Intent(app, TransferService::class.java)) }
     }
@@ -104,8 +115,15 @@ class TransferEngine private constructor(private val app: Application) {
     fun startScan() {
         stopScan()
         _state.update { it.copy(devices = emptyList(), error = null) }
+        locationProblem()?.let { msg ->
+            _state.update { it.copy(error = msg) }
+            return
+        }
         try {
-            scanner = BleScanner(app) { dev ->
+            scanner = BleScanner(
+                app,
+                onError = { msg -> _state.update { it.copy(scanning = false, error = msg) } },
+            ) { dev ->
                 _state.update { s -> s.copy(devices = s.devices.filter { it.address != dev.address } + dev) }
             }.also { it.start() }
             _state.update { it.copy(scanning = true) }
@@ -188,6 +206,10 @@ class TransferEngine private constructor(private val app: Application) {
 
     fun startReceiving() {
         cancelAll()
+        locationProblem()?.let { msg ->
+            _state.value = UiState(screen = Screen.RECEIVE, error = msg)
+            return
+        }
         _state.value = UiState(screen = Screen.RECEIVE, busy = true, status = "Creando red Wi-Fi propia…")
         startService()
         job = scope.launch {

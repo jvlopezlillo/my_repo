@@ -116,7 +116,11 @@ class BleHost(private val ctx: Context) {
 
 /** Lado EMISOR: busca receptores anunciándose por BLE. */
 @SuppressLint("MissingPermission")
-class BleScanner(ctx: Context, private val onResult: (DiscoveredDevice) -> Unit) {
+class BleScanner(
+    ctx: Context,
+    private val onError: (String) -> Unit = {},
+    private val onResult: (DiscoveredDevice) -> Unit,
+) {
     private val manager = ContextCompat.getSystemService(ctx, BluetoothManager::class.java)
     private var scanner: BluetoothLeScanner? = null
     private val callback = object : ScanCallback() {
@@ -124,6 +128,10 @@ class BleScanner(ctx: Context, private val onResult: (DiscoveredDevice) -> Unit)
             val dev = result.device
             val name = result.scanRecord?.deviceName ?: dev.name ?: "Dispositivo ${dev.address.takeLast(5)}"
             onResult(DiscoveredDevice(dev.address, name, dev, result.rssi))
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            onError("La búsqueda Bluetooth falló (código $errorCode). Desactiva y activa el Bluetooth e inténtalo de nuevo.")
         }
     }
 

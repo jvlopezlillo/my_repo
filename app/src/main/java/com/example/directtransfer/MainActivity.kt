@@ -188,6 +188,13 @@ class MainActivity : ComponentActivity() {
             if (state.scanning) CircularProgressIndicator(Modifier.height(24.dp))
         }
         Spacer(Modifier.height(4.dp))
+        if (state.scanning && state.devices.isEmpty()) {
+            Text(
+                "Buscando… El otro móvil debe tener la app abierta con «Recibir» activo y esperando " +
+                    "(no se ve a sí mismo: haz falta dos móviles).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         Text(
             "En el otro dispositivo abre la app y pulsa «Recibir».",
             style = MaterialTheme.typography.bodySmall,

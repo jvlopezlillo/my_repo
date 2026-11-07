@@ -42,25 +42,59 @@ class WifiDirectHost(private val ctx: Context) {
         val ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
         channel = ch
 
-        // Si quedó un grupo anterior, se elimina.
+        // ¿Ya hay un grupo nuestro utilizable (de un intento anterior)? Se reutiliza sin tocarlo.
+        readyGroup(mgr, ch, token)?.let { return it }
+
+        // Limpieza de estado previo. Los fallos aquí NO son fatales (el sistema suele responder BUSY).
+        runCatching { mgr.stopPeerDiscovery(ch, null) }
+        runCatching { mgr.cancelConnect(ch, null) }
         if (groupInfo(mgr, ch) != null) {
-            suspendCancellableCoroutine<Unit> { c -> mgr.removeGroup(ch, listener(c, "eliminar el grupo anterior")) }
-            delay(500)
+            suspendCancellableCoroutine<Unit> { c -> mgr.removeGroup(ch, ignoringListener(c)) }
+            delay(1_000)
         }
 
-        suspendCancellableCoroutine<Unit> { c -> mgr.createGroup(ch, listener(c, "crear la red Wi-Fi")) }
+        // Crear el grupo; si el sistema está ocupado se reintenta.
+        var lastCode = -1
+        var created = false
+        for (attempt in 1..6) {
+            val err: Int? = suspendCancellableCoroutine { c -> mgr.createGroup(ch, codeListener(c)) }
+            if (err == null) {
+                created = true
+                break
+            }
+            lastCode = err
+            if (err == WifiP2pManager.P2P_UNSUPPORTED) break
+            readyGroup(mgr, ch, token)?.let { return it } // puede haberse formado a pesar del error
+            delay(1_500)
+        }
+        if (!created) {
+            throw IOException(
+                "No se pudo crear la red Wi-Fi Direct (${describe(lastCode)}). " +
+                    "Prueba a desactivar y volver a activar el Wi-Fi y a cerrar otras apps que usen Wi-Fi Direct.",
+            )
+        }
 
         // Esperar a que el grupo esté formado y tenga credenciales.
         repeat(40) {
-            val g = groupInfo(mgr, ch)
-            val ssid = g?.networkName
-            val pass = g?.passphrase
-            if (g != null && g.isGroupOwner && !ssid.isNullOrEmpty() && !pass.isNullOrEmpty()) {
-                return LinkInfo(ssid, pass, Protocol.DEFAULT_GROUP_OWNER_IP, Protocol.TCP_PORT, token)
-            }
+            readyGroup(mgr, ch, token)?.let { return it }
             delay(250)
         }
         throw IOException("La red Wi-Fi Direct no llegó a formarse")
+    }
+
+    private suspend fun readyGroup(mgr: WifiP2pManager, ch: WifiP2pManager.Channel, token: String): LinkInfo? {
+        val g = groupInfo(mgr, ch) ?: return null
+        val ssid = g.networkName
+        val pass = g.passphrase
+        if (!g.isGroupOwner || ssid.isNullOrEmpty() || pass.isNullOrEmpty()) return null
+        return LinkInfo(ssid, pass, Protocol.DEFAULT_GROUP_OWNER_IP, Protocol.TCP_PORT, token)
+    }
+
+    private fun describe(code: Int) = when (code) {
+        WifiP2pManager.ERROR -> "error interno"
+        WifiP2pManager.P2P_UNSUPPORTED -> "este dispositivo no soporta Wi-Fi Direct"
+        WifiP2pManager.BUSY -> "el sistema está ocupado"
+        else -> "código $code"
     }
 
     fun stop() {
@@ -74,14 +108,27 @@ class WifiDirectHost(private val ctx: Context) {
     private suspend fun groupInfo(mgr: WifiP2pManager, ch: WifiP2pManager.Channel): WifiP2pGroup? =
         suspendCancellableCoroutine { c -> mgr.requestGroupInfo(ch) { g -> if (c.isActive) c.resume(g) } }
 
-    private fun listener(c: CancellableContinuation<Unit>, what: String) =
+    /** Resuelve con null si tuvo éxito, o con el código de error. */
+    private fun codeListener(c: CancellableContinuation<Int?>) =
+        object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                if (c.isActive) c.resume(null)
+            }
+
+            override fun onFailure(reason: Int) {
+                if (c.isActive) c.resume(reason)
+            }
+        }
+
+    /** Resuelve siempre (éxito o fallo): se usa para limpiezas no críticas. */
+    private fun ignoringListener(c: CancellableContinuation<Unit>) =
         object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 if (c.isActive) c.resume(Unit)
             }
 
             override fun onFailure(reason: Int) {
-                if (c.isActive) c.resumeWithException(IOException("No se pudo $what (código $reason)"))
+                if (c.isActive) c.resume(Unit)
             }
         }
 }
