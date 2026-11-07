@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -70,6 +71,9 @@ fun wifiStateDescription(ctx: Context): String {
 class WifiDirectHost(private val ctx: Context) {
     private companion object {
         val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+        /** Limpieza del grupo de la sesión anterior; la siguiente sesión debe esperarla. */
+        @Volatile var lastCleanup: Job? = null
     }
 
     private val manager = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
@@ -80,15 +84,25 @@ class WifiDirectHost(private val ctx: Context) {
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         if (!wifi.isWifiEnabled) throw IOException("Activa el Wi-Fi (no hace falta estar conectado a ninguna red)")
 
+        lastCleanup?.let {
+            if (it.isActive) {
+                log("Esperando a que termine la limpieza de la sesión anterior…")
+                it.join()
+            }
+        }
+
         var ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
         channel = ch
-        log("Wi-Fi: ${wifiStateDescription(ctx)}")
+        log("Wi-Fi: ${wifiStateDescription(ctx)} · Wi-Fi Direct: ${p2pState(mgr, ch)}")
 
         // Un grupo anterior solo se reutiliza si lo creamos nosotros (2,4 GHz). Los grupos del sistema
         // (p. ej. «DIRECT-Ms-…», normalmente en 5 GHz) se eliminan para crear uno propio.
         val existing = groupInfo(mgr, ch)
         if (existing != null) {
-            log("Había un grupo anterior: ${existing.networkName}")
+            log(
+                "Había un grupo anterior: ${existing.networkName} (propietario=${existing.isGroupOwner}, " +
+                    "clientes=${existing.clientList.size}, interfaz=${existing.`interface`})",
+            )
             readyGroup(mgr, ch, token, onlyOurs = true)?.let {
                 log("Se reutiliza (es nuestro, 2,4 GHz)")
                 return it
@@ -108,7 +122,7 @@ class WifiDirectHost(private val ctx: Context) {
             if (!gone) {
                 throw StaleGroupException(
                     "Hay un grupo Wi-Fi Direct anterior («${existing.networkName}») que Android no deja eliminar. " +
-                        "Apaga y vuelve a encender el Wi-Fi de este móvil (o reinícialo) y pulsa Recibir otra vez.",
+                        "Apaga y vuelve a encender el Wi-Fi de este móvil y pulsa Recibir otra vez. Si sigue igual, reinicia el móvil.",
                 )
             }
         }
@@ -198,7 +212,7 @@ class WifiDirectHost(private val ctx: Context) {
         val mgr = manager ?: return
         val ch = channel ?: return
         channel = null
-        cleanupScope.launch {
+        lastCleanup = cleanupScope.launch {
             repeat(5) {
                 if (groupInfo(mgr, ch) == null) return@repeat
                 withTimeoutOrNull(3_000) {
@@ -209,6 +223,23 @@ class WifiDirectHost(private val ctx: Context) {
             if (Build.VERSION.SDK_INT >= 27) runCatching { ch.close() }
         }
     }
+
+    private suspend fun p2pState(mgr: WifiP2pManager, ch: WifiP2pManager.Channel): String =
+        if (Build.VERSION.SDK_INT >= 29) {
+            withTimeoutOrNull(2_000) {
+                suspendCancellableCoroutine<String> { c ->
+                    mgr.requestP2pState(ch) { st ->
+                        if (c.isActive) c.resume(
+                            when (st) {
+                                WifiP2pManager.WIFI_P2P_STATE_ENABLED -> "activado"
+                                WifiP2pManager.WIFI_P2P_STATE_DISABLED -> "desactivado"
+                                else -> "estado $st"
+                            },
+                        )
+                    }
+                }
+            } ?: "sin respuesta"
+        } else "?"
 
     private suspend fun removeGroupWithRetries(
         mgr: WifiP2pManager, ch: WifiP2pManager.Channel, tries: Int, log: (String) -> Unit,
