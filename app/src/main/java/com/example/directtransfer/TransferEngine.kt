@@ -158,13 +158,14 @@ class TransferEngine private constructor(private val app: Application) {
         job = scope.launch {
             try {
                 val info = readLinkWithRetry(device)
-                _state.update { it.copy(status = "Uniéndose a la red Wi-Fi del receptor… (Android puede pedir confirmación)") }
                 val link = WifiClientLink(app).also { wifiLink = it }
-                val network = link.connect(info.ssid, info.passphrase)
+                val conn = link.connect(info.ssid, info.passphrase, info.host) { msg ->
+                    _state.update { it.copy(status = msg) }
+                }
                 _state.update { it.copy(status = "Esperando que el otro dispositivo acepte…") }
                 val s = FileSender(app).also { sender = it }
                 s.send(
-                    items, info, network, link.gatewayOf(network), deviceName,
+                    items, info, conn.socketFactory, conn.hosts, deviceName,
                     onAccepted = { resumed ->
                         _state.update { st ->
                             st.copy(status = if (resumed > 0) "Reanudando (${formatBytes(resumed)} ya enviados)…" else "Enviando…")

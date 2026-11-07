@@ -10,18 +10,22 @@ import android.net.wifi.SupplicantState
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
+import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pGroup
+import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Looper
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import java.io.IOException
+import javax.net.SocketFactory
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -134,19 +138,113 @@ class WifiDirectHost(private val ctx: Context) {
 }
 
 /**
- * Lado EMISOR: se une a la red del receptor como cliente Wi-Fi.
- * Android 10+: WifiNetworkSpecifier. Android 5-9: WifiConfiguration clásico.
+ * Lado EMISOR: se une a la red del receptor.
+ *  - Android 10+: primero por Wi-Fi Direct con nombre+clave (sin diálogos); si falla, WifiNetworkSpecifier.
+ *  - Android 5-9: WifiConfiguration clásico.
  */
+@SuppressLint("MissingPermission")
 @Suppress("DEPRECATION")
-class WifiClientLink(ctx: Context) {
+class WifiClientLink(private val ctx: Context) {
+    /** Cómo abrir sockets hacia el receptor y qué IPs probar. */
+    class Link(val socketFactory: SocketFactory, val hosts: List<String>)
+
     private val cm = ContextCompat.getSystemService(ctx, ConnectivityManager::class.java)!!
     private val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val p2p = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
+    private var p2pChannel: WifiP2pManager.Channel? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var legacyNetId = -1
     private var previousNetId = -1
 
-    suspend fun connect(ssid: String, passphrase: String): Network =
-        if (Build.VERSION.SDK_INT >= 29) connectModern(ssid, passphrase) else connectLegacy(ssid, passphrase)
+    suspend fun connect(ssid: String, passphrase: String, fallbackHost: String, onStatus: (String) -> Unit): Link {
+        if (Build.VERSION.SDK_INT >= 29) {
+            onStatus("Uniéndose al grupo Wi-Fi Direct del receptor…")
+            val first = try {
+                connectP2p(ssid, passphrase, fallbackHost)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                releaseP2p()
+                null
+            }
+            if (first != null) return first
+            onStatus("Probando conexión Wi-Fi clásica… (Android puede pedir confirmación)")
+            val network = connectModern(ssid, passphrase)
+            return Link(network.socketFactory, listOfNotNull(gatewayOf(network), fallbackHost).distinct())
+        }
+        val network = connectLegacy(ssid, passphrase)
+        return Link(network.socketFactory, listOfNotNull(gatewayOf(network), fallbackHost).distinct())
+    }
+
+    // ------------------------------------------------ Wi-Fi Direct (credenciales)
+
+    @RequiresApi(29)
+    private suspend fun connectP2p(ssid: String, pass: String, fallbackHost: String): Link {
+        val mgr = p2p ?: throw IOException("Wi-Fi Direct no disponible")
+        val ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
+        p2pChannel = ch
+
+        // Si este móvil tenía un grupo propio o una conexión previa, se limpia (los fallos no importan).
+        runCatching { mgr.stopPeerDiscovery(ch, null) }
+        runCatching { mgr.cancelConnect(ch, null) }
+        val existing = suspendCancellableCoroutine<WifiP2pGroup?> { c ->
+            mgr.requestGroupInfo(ch) { g -> if (c.isActive) c.resume(g) }
+        }
+        if (existing != null) {
+            suspendCancellableCoroutine<Unit> { c ->
+                mgr.removeGroup(ch, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { if (c.isActive) c.resume(Unit) }
+                    override fun onFailure(reason: Int) { if (c.isActive) c.resume(Unit) }
+                })
+            }
+            delay(1_000)
+        }
+
+        val cfg = WifiP2pConfig.Builder().setNetworkName(ssid).setPassphrase(pass).build()
+        var lastCode = -1
+        var ok = false
+        for (attempt in 1..4) {
+            val err: Int? = suspendCancellableCoroutine { c ->
+                mgr.connect(ch, cfg, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { if (c.isActive) c.resume(null) }
+                    override fun onFailure(reason: Int) { if (c.isActive) c.resume(reason) }
+                })
+            }
+            if (err == null) { ok = true; break }
+            lastCode = err
+            delay(1_500)
+        }
+        if (!ok) throw IOException("Wi-Fi Direct rechazó la conexión (código $lastCode)")
+
+        val owner = try {
+            withTimeout(35_000) { awaitGroupOwner(mgr, ch) }
+        } catch (e: TimeoutCancellationException) {
+            throw IOException("No se pudo unir al grupo Wi-Fi Direct")
+        }
+        // En una conexión Wi-Fi Direct el sistema añade la ruta del grupo: sockets normales, sin enlazar a una Network.
+        return Link(SocketFactory.getDefault(), listOf(owner, fallbackHost).distinct())
+    }
+
+    private suspend fun awaitGroupOwner(mgr: WifiP2pManager, ch: WifiP2pManager.Channel): String {
+        while (true) {
+            val info = suspendCancellableCoroutine<WifiP2pInfo?> { c ->
+                mgr.requestConnectionInfo(ch) { i -> if (c.isActive) c.resume(i) }
+            }
+            val addr = info?.groupOwnerAddress?.hostAddress
+            if (info != null && info.groupFormed && !info.isGroupOwner && addr != null) return addr
+            delay(500)
+        }
+    }
+
+    private fun releaseP2p() {
+        val ch = p2pChannel ?: return
+        runCatching { p2p?.cancelConnect(ch, null) }
+        runCatching { p2p?.removeGroup(ch, null) }
+        if (Build.VERSION.SDK_INT >= 27) runCatching { ch.close() }
+        p2pChannel = null
+    }
+
+    // ------------------------------------------------ WifiNetworkSpecifier (Android 10+)
 
     @RequiresApi(29)
     private suspend fun connectModern(ssid: String, passphrase: String): Network =
@@ -173,6 +271,8 @@ class WifiClientLink(ctx: Context) {
             cm.requestNetwork(request, cb, 45_000)
             c.invokeOnCancellation { close() }
         }
+
+    // ------------------------------------------------ Android 5-9
 
     private suspend fun connectLegacy(ssid: String, passphrase: String): Network {
         if (!wm.isWifiEnabled) throw IOException("Activa el Wi-Fi")
@@ -215,6 +315,7 @@ class WifiClientLink(ctx: Context) {
         cm.getLinkProperties(network)?.routes?.firstOrNull { it.hasGateway() }?.gateway?.hostAddress
 
     fun close() {
+        releaseP2p()
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
         if (legacyNetId != -1) {

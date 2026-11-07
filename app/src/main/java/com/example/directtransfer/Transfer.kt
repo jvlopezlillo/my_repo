@@ -2,7 +2,6 @@ package com.example.directtransfer
 
 import android.content.ContentValues
 import android.content.Context
-import android.net.Network
 import android.net.Uri
 import android.media.MediaScannerConnection
 import android.os.Build
@@ -29,6 +28,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.MessageDigest
+import javax.net.SocketFactory
 import kotlin.coroutines.coroutineContext
 
 /** Construye la lista de ficheros a enviar a partir de lo que elige el usuario. */
@@ -104,13 +104,13 @@ class FileSender(private val ctx: Context) {
     suspend fun send(
         items: List<SendItem>,
         info: LinkInfo,
-        network: Network,
-        gateway: String?,
+        socketFactory: SocketFactory,
+        hosts: List<String>,
         deviceName: String,
         onAccepted: (resumedBytes: Long) -> Unit,
         onProgress: (Progress) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        val sock = connectWithRetry(network, listOfNotNull(gateway, info.host).distinct(), info.port)
+        val sock = connectWithRetry(socketFactory, hosts, info.port)
         socket = sock
         try {
             sock.tcpNoDelay = true
@@ -173,12 +173,12 @@ class FileSender(private val ctx: Context) {
         }
     }
 
-    private suspend fun connectWithRetry(network: Network, hosts: List<String>, port: Int): Socket {
+    private suspend fun connectWithRetry(socketFactory: SocketFactory, hosts: List<String>, port: Int): Socket {
         var last: Exception? = null
         repeat(8) {
             for (h in hosts) {
                 coroutineContext.ensureActive()
-                val s = network.socketFactory.createSocket()
+                val s = socketFactory.createSocket()
                 try {
                     s.connect(InetSocketAddress(h, port), 5_000)
                     return s
