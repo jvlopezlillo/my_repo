@@ -12,6 +12,7 @@ import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.net.wifi.WpsInfo
 import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pDeviceList
 import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pInfo
@@ -43,6 +44,16 @@ private fun p2pCodeListener(c: CancellableContinuation<Int?>) =
         }
     }
 
+/** Estado del Wi-Fi normal (diagnóstico): una conexión a un router en otro canal puede impedir Wi-Fi Direct. */
+@Suppress("DEPRECATION")
+fun wifiStateDescription(ctx: Context): String {
+    val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    if (!wm.isWifiEnabled) return "apagado"
+    val i = wm.connectionInfo
+    return if (i != null && i.networkId != -1 && i.supplicantState == SupplicantState.COMPLETED)
+        "conectado a una red (${i.frequency} MHz)" else "encendido, sin red"
+}
+
 /**
  * Lado RECEPTOR: crea una red Wi-Fi Direct propia (el dispositivo actúa como punto de acceso).
  * El sistema genera SSID y contraseña; se leen del grupo una vez formado (funciona desde Android 5).
@@ -52,52 +63,68 @@ class WifiDirectHost(private val ctx: Context) {
     private val manager = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private var channel: WifiP2pManager.Channel? = null
 
-    suspend fun start(token: String): LinkInfo {
+    suspend fun start(token: String, log: (String) -> Unit = {}): LinkInfo {
         val mgr = manager ?: throw IOException("Wi-Fi Direct no disponible en este dispositivo")
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         if (!wifi.isWifiEnabled) throw IOException("Activa el Wi-Fi (no hace falta estar conectado a ninguna red)")
 
         val ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
         channel = ch
+        log("Wi-Fi: ${wifiStateDescription(ctx)}")
 
-        // ¿Ya hay un grupo nuestro utilizable (de un intento anterior)? Se reutiliza sin tocarlo.
-        readyGroup(mgr, ch, token)?.let { return it }
-
-        // Limpieza de estado previo. Los fallos aquí NO son fatales (el sistema suele responder BUSY).
-        runCatching { mgr.stopPeerDiscovery(ch, null) }
-        runCatching { mgr.cancelConnect(ch, null) }
-        if (groupInfo(mgr, ch) != null) {
-            suspendCancellableCoroutine<Unit> { c -> mgr.removeGroup(ch, ignoringListener(c)) }
-            delay(1_000)
+        // Un grupo anterior solo se reutiliza si lo creamos nosotros (2,4 GHz). Los grupos del sistema
+        // (p. ej. «DIRECT-Ms-…», normalmente en 5 GHz) se eliminan para crear uno propio.
+        val existing = groupInfo(mgr, ch)
+        if (existing != null) {
+            log("Había un grupo anterior: ${existing.networkName}")
+            readyGroup(mgr, ch, token, onlyOurs = true)?.let {
+                log("Se reutiliza (es nuestro, 2,4 GHz)")
+                return it
+            }
+            runCatching { mgr.stopPeerDiscovery(ch, null) }
+            runCatching { mgr.cancelConnect(ch, null) }
+            for (i in 1..6) {
+                val err: Int? = suspendCancellableCoroutine { c -> mgr.removeGroup(ch, p2pCodeListener(c)) }
+                log("Eliminar grupo anterior: ${err?.let { describe(it) } ?: "OK"}")
+                delay(1_000)
+                if (groupInfo(mgr, ch) == null) break
+            }
         }
 
-        // Android 10+: grupo forzado a 2,4 GHz (compatible con cualquier móvil; en 5 GHz algunos no se unen).
-        val cfg: WifiP2pConfig? = if (Build.VERSION.SDK_INT >= 29) {
-            runCatching {
-                WifiP2pConfig.Builder()
-                    .setNetworkName("DIRECT-dt-" + Protocol.randomString(4))
-                    .setPassphrase(Protocol.randomString(12))
-                    .enablePersistentMode(false)
-                    .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
-                    .build()
-            }.getOrNull()
-        } else null
+        // Planes de creación: primero 2,4 GHz forzado (compatible con cualquier móvil), luego banda
+        // automática y, por último, sin configuración (el sistema elige nombre y banda).
+        fun cfgFor(band: Int): WifiP2pConfig? =
+            if (Build.VERSION.SDK_INT >= 29) {
+                runCatching {
+                    WifiP2pConfig.Builder()
+                        .setNetworkName("DIRECT-dt-" + Protocol.randomString(4))
+                        .setPassphrase(Protocol.randomString(12))
+                        .enablePersistentMode(false)
+                        .setGroupOperatingBand(band)
+                        .build()
+                }.getOrNull()
+            } else null
 
-        // Crear el grupo; si el sistema está ocupado se reintenta. Los últimos intentos van sin configuración.
+        val plans = buildList<Pair<String, WifiP2pConfig?>> {
+            cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)?.let { add("2,4 GHz" to it); add("2,4 GHz" to it) }
+            cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_AUTO)?.let { add("banda automática" to it) }
+            add("sin configuración" to null)
+            add("sin configuración" to null)
+        }
+
         var lastCode = -1
         var created = false
-        for (attempt in 1..6) {
-            val useCfg = cfg != null && attempt <= 3
+        for ((name, cfg) in plans) {
             val err: Int? = suspendCancellableCoroutine { c ->
-                if (useCfg) mgr.createGroup(ch, cfg, codeListener(c)) else mgr.createGroup(ch, codeListener(c))
+                if (cfg != null) mgr.createGroup(ch, cfg, p2pCodeListener(c)) else mgr.createGroup(ch, p2pCodeListener(c))
             }
+            log("Crear grupo ($name): ${err?.let { describe(it) } ?: "OK"}")
             if (err == null) {
                 created = true
                 break
             }
             lastCode = err
             if (err == WifiP2pManager.P2P_UNSUPPORTED) break
-            readyGroup(mgr, ch, token)?.let { return it } // puede haberse formado a pesar del error
             delay(1_500)
         }
         if (!created) {
@@ -109,20 +136,26 @@ class WifiDirectHost(private val ctx: Context) {
 
         // Esperar a que el grupo esté formado y tenga credenciales.
         repeat(40) {
-            readyGroup(mgr, ch, token)?.let { return it }
+            readyGroup(mgr, ch, token)?.let {
+                log("Grupo listo: ${it.ssid}" + if (it.ssid.startsWith("DIRECT-dt-")) " (2,4 GHz forzado)" else " (nombre del sistema: banda no controlada)")
+                return it
+            }
             delay(250)
         }
         throw IOException("La red Wi-Fi Direct no llegó a formarse")
     }
 
-    private suspend fun readyGroup(mgr: WifiP2pManager, ch: WifiP2pManager.Channel, token: String): LinkInfo? {
+    private suspend fun readyGroup(
+        mgr: WifiP2pManager, ch: WifiP2pManager.Channel, token: String, onlyOurs: Boolean = false,
+    ): LinkInfo? {
         val g = groupInfo(mgr, ch) ?: return null
         val ssid = g.networkName
         val pass = g.passphrase
         if (!g.isGroupOwner || ssid.isNullOrEmpty() || pass.isNullOrEmpty()) return null
+        if (onlyOurs && !ssid.startsWith("DIRECT-dt-")) return null
         return LinkInfo(
             ssid, pass, Protocol.DEFAULT_GROUP_OWNER_IP, Protocol.TCP_PORT, token,
-            g.owner?.deviceAddress, deviceDescription(),
+            g.owner?.deviceAddress, deviceDescription(), g.owner?.deviceName.orEmpty(),
         )
     }
 
@@ -193,6 +226,7 @@ class WifiClientLink(private val ctx: Context) {
         passphrase: String,
         fallbackHost: String,
         mac: String?,
+        pname: String,
         onStatus: (String) -> Unit,
         log: (String) -> Unit,
     ): Link {
@@ -200,11 +234,11 @@ class WifiClientLink(private val ctx: Context) {
             onStatus("1/3 Uniéndose por Wi-Fi Direct (credenciales)…")
             step("Wi-Fi Direct con credenciales", log) { connectP2p(ssid, passphrase, fallbackHost) }?.let { return it }
 
-            if (mac != null) {
+            if (mac != null || pname.isNotEmpty()) {
                 onStatus("2/3 Wi-Fi Direct clásico… (el receptor puede pedir aceptar la invitación)")
-                step("Wi-Fi Direct clásico", log) { connectP2pClassic(mac, fallbackHost) }?.let { return it }
+                step("Wi-Fi Direct clásico", log) { connectP2pClassic(mac, pname, fallbackHost) }?.let { return it }
             } else {
-                log("Wi-Fi Direct clásico: omitido (el receptor no envió su dirección)")
+                log("Wi-Fi Direct clásico: omitido (el receptor no envió su identificación)")
             }
 
             onStatus("3/3 Probando conexión Wi-Fi clásica… (Android puede pedir confirmación)")
@@ -283,7 +317,7 @@ class WifiClientLink(private val ctx: Context) {
     // ------------------------------------------------ Wi-Fi Direct clásico (descubrir + conectar con invitación)
 
     @RequiresApi(29)
-    private suspend fun connectP2pClassic(mac: String, fallbackHost: String): Link {
+    private suspend fun connectP2pClassic(mac: String?, pname: String, fallbackHost: String): Link {
         val mgr = p2p ?: throw IOException("Wi-Fi Direct no disponible")
         val ch = p2pChannel ?: mgr.initialize(ctx, Looper.getMainLooper(), null).also { p2pChannel = it }
         runCatching { mgr.cancelConnect(ch, null) }
@@ -291,23 +325,34 @@ class WifiClientLink(private val ctx: Context) {
         val dErr: Int? = suspendCancellableCoroutine { c -> mgr.discoverPeers(ch, p2pCodeListener(c)) }
         if (dErr != null) throw IOException("No se pudo buscar dispositivos Wi-Fi Direct (código $dErr)")
 
+        // Desde Android 10 la dirección propia llega oculta (02:00:00:00:00:00): se empareja por nombre.
+        val realMac = mac?.takeIf { it != "02:00:00:00:00:00" }
+        var found: WifiP2pDevice? = null
+        var seen = ""
         try {
             withTimeout(20_000) {
                 while (true) {
                     val peers = suspendCancellableCoroutine<WifiP2pDeviceList?> { c ->
                         mgr.requestPeers(ch) { l -> if (c.isActive) c.resume(l) }
                     }
-                    if (peers?.deviceList?.any { it.deviceAddress.equals(mac, ignoreCase = true) } == true) break
+                    val list = peers?.deviceList.orEmpty()
+                    seen = list.joinToString { it.deviceName }
+                    found = list.firstOrNull {
+                        (realMac != null && it.deviceAddress.equals(realMac, ignoreCase = true)) ||
+                            (pname.isNotEmpty() && it.deviceName == pname)
+                    }
+                    if (found != null) break
                     delay(700)
                 }
             }
         } catch (e: TimeoutCancellationException) {
-            throw IOException("el receptor no aparece entre los dispositivos Wi-Fi Direct cercanos")
+            throw IOException("el receptor «$pname» no aparece entre los dispositivos Wi-Fi Direct cercanos (vistos: ${seen.ifEmpty { "ninguno" }})")
         }
+        val target = found ?: throw IOException("receptor no encontrado")
         runCatching { mgr.stopPeerDiscovery(ch, null) }
 
         val cfg = WifiP2pConfig().apply {
-            deviceAddress = mac
+            deviceAddress = target.deviceAddress
             wps.setup = WpsInfo.PBC
             groupOwnerIntent = 0
         }

@@ -203,23 +203,7 @@ class MainActivity : ComponentActivity() {
             style = MaterialTheme.typography.bodySmall,
         )
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
-        if (state.error != null && state.log.isNotEmpty()) {
-            val clip = LocalClipboardManager.current
-            val report = state.error + "\n\n" + state.log.joinToString("\n")
-            Text(
-                state.log.joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            OutlinedButton(
-                onClick = {
-                    clip.setText(AnnotatedString(report))
-                    Toast.makeText(this@MainActivity, "Diagnóstico copiado", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.padding(top = 8.dp),
-            ) { Text("Copiar diagnóstico") }
-        }
+        if (state.error != null) LogBox(state)
         if (state.canResume) {
             Button(onClick = { withPermissions { vm.resumeSend() } }, modifier = Modifier.padding(top = 8.dp)) {
                 Text("Reanudar envío")
@@ -245,6 +229,27 @@ class MainActivity : ComponentActivity() {
         Text("Recibir", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
         TransferStatus(state)
+        if (state.log.isNotEmpty()) LogBox(state)
+    }
+
+    @Composable
+    private fun LogBox(state: UiState) {
+        if (state.log.isEmpty()) return
+        val clip = LocalClipboardManager.current
+        val report = (state.error?.plus("\n\n") ?: "") + state.log.joinToString("\n")
+        Spacer(Modifier.height(12.dp))
+        Text(
+            state.log.joinToString("\n"),
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
+        OutlinedButton(
+            onClick = {
+                clip.setText(AnnotatedString(report))
+                Toast.makeText(this@MainActivity, "Diagnóstico copiado", Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.padding(top = 8.dp),
+        ) { Text("Copiar diagnóstico") }
     }
 
     @Composable

@@ -38,11 +38,13 @@ data class LinkInfo(
     val mac: String? = null,
     /** Descripción del móvil receptor (solo diagnóstico). */
     val dev: String = "",
+    /** Nombre del dispositivo Wi-Fi Direct del receptor (la dirección viene oculta en Android 10+). */
+    val pname: String = "",
 ) {
     fun toJson(): String = JSONObject()
         .put("ssid", ssid).put("pass", passphrase).put("host", host)
         .put("port", port).put("token", token)
-        .put("mac", mac ?: "").put("dev", dev).toString()
+        .put("mac", mac ?: "").put("dev", dev).put("pname", pname).toString()
 
     companion object {
         fun fromJson(json: String): LinkInfo {
@@ -50,7 +52,7 @@ data class LinkInfo(
             return LinkInfo(
                 o.getString("ssid"), o.getString("pass"), o.getString("host"),
                 o.getInt("port"), o.getString("token"),
-                o.optString("mac").ifEmpty { null }, o.optString("dev"),
+                o.optString("mac").ifEmpty { null }, o.optString("dev"), o.optString("pname"),
             )
         }
     }

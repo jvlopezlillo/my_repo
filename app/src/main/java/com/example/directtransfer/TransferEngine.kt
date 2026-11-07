@@ -156,7 +156,7 @@ class TransferEngine private constructor(private val app: Application) {
         val items = _state.value.items
         _state.update {
             it.copy(busy = true, error = null, finished = false, progress = null, canResume = false,
-                log = listOf("Emisor: ${deviceDescription()}"),
+                log = listOf("Emisor: ${deviceDescription()}", "Wi-Fi emisor: ${wifiStateDescription(app)}"),
                 status = "Conectando por Bluetooth con ${device.name}…")
         }
         startService()
@@ -166,7 +166,7 @@ class TransferEngine private constructor(private val app: Application) {
                 addLog("Receptor: ${info.dev.ifEmpty { "?" }} · red ${info.ssid} · dir ${info.mac ?: "?"}")
                 val link = WifiClientLink(app).also { wifiLink = it }
                 val conn = link.connect(
-                    info.ssid, info.passphrase, info.host, info.mac,
+                    info.ssid, info.passphrase, info.host, info.mac, info.pname,
                     onStatus = { msg -> _state.update { it.copy(status = msg) } },
                     log = { msg -> addLog(msg) },
                 )
@@ -219,12 +219,15 @@ class TransferEngine private constructor(private val app: Application) {
             _state.value = UiState(screen = Screen.RECEIVE, error = msg)
             return
         }
-        _state.value = UiState(screen = Screen.RECEIVE, busy = true, status = "Creando red Wi-Fi propia…")
+        _state.value = UiState(
+            screen = Screen.RECEIVE, busy = true, status = "Creando red Wi-Fi propia…",
+            log = listOf("Receptor: ${deviceDescription()}"),
+        )
         startService()
         job = scope.launch {
             try {
                 val token = Protocol.randomString(16)
-                val link = WifiDirectHost(app).also { wifiHost = it }.start(token)
+                val link = WifiDirectHost(app).also { wifiHost = it }.start(token) { msg -> addLog(msg) }
                 val rx = FileReceiver(app, token, Protocol.TCP_PORT).also { receiver = it }
                 rx.open()
                 _state.update { it.copy(status = "Activando Bluetooth…") }
