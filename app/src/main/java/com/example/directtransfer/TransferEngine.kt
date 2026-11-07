@@ -41,6 +41,8 @@ data class UiState(
     val error: String? = null,
     /** El último envío se interrumpió y puede reanudarse con el mismo dispositivo. */
     val canResume: Boolean = false,
+    /** Registro de pasos de la conexión (diagnóstico). */
+    val log: List<String> = emptyList(),
 )
 
 /**
@@ -72,6 +74,8 @@ class TransferEngine private constructor(private val app: Application) {
         return if (LocationManagerCompat.isLocationEnabled(lm)) null
         else "Activa la ubicación del móvil (ajustes rápidos). Android la exige para encontrar dispositivos cercanos; la app no la usa."
     }
+
+    private fun addLog(msg: String) = _state.update { it.copy(log = it.log + msg) }
 
     private fun startService() {
         runCatching { ContextCompat.startForegroundService(app, Intent(app, TransferService::class.java)) }
@@ -152,16 +156,20 @@ class TransferEngine private constructor(private val app: Application) {
         val items = _state.value.items
         _state.update {
             it.copy(busy = true, error = null, finished = false, progress = null, canResume = false,
+                log = listOf("Emisor: ${deviceDescription()}"),
                 status = "Conectando por Bluetooth con ${device.name}…")
         }
         startService()
         job = scope.launch {
             try {
                 val info = readLinkWithRetry(device)
+                addLog("Receptor: ${info.dev.ifEmpty { "?" }} · red ${info.ssid} · dir ${info.mac ?: "?"}")
                 val link = WifiClientLink(app).also { wifiLink = it }
-                val conn = link.connect(info.ssid, info.passphrase, info.host) { msg ->
-                    _state.update { it.copy(status = msg) }
-                }
+                val conn = link.connect(
+                    info.ssid, info.passphrase, info.host, info.mac,
+                    onStatus = { msg -> _state.update { it.copy(status = msg) } },
+                    log = { msg -> addLog(msg) },
+                )
                 _state.update { it.copy(status = "Esperando que el otro dispositivo acepte…") }
                 val s = FileSender(app).also { sender = it }
                 s.send(
@@ -221,7 +229,7 @@ class TransferEngine private constructor(private val app: Application) {
                 rx.open()
                 _state.update { it.copy(status = "Activando Bluetooth…") }
                 BleHost(app).also { bleHost = it }.start(link.toJson())
-                _state.update { it.copy(status = "Visible como «$deviceName». Esperando al emisor…") }
+                _state.update { it.copy(status = "Visible como «$deviceName» (red ${link.ssid}). Esperando al emisor…") }
 
                 val result = rx.receive(
                     onRequest = { req ->

@@ -1,6 +1,7 @@
 package com.example.directtransfer
 
 import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import org.json.JSONObject
 import java.io.IOException
@@ -33,10 +34,15 @@ data class LinkInfo(
     val host: String,
     val port: Int,
     val token: String,
+    /** Dirección Wi-Fi Direct del receptor (para el método de conexión clásico). */
+    val mac: String? = null,
+    /** Descripción del móvil receptor (solo diagnóstico). */
+    val dev: String = "",
 ) {
     fun toJson(): String = JSONObject()
         .put("ssid", ssid).put("pass", passphrase).put("host", host)
-        .put("port", port).put("token", token).toString()
+        .put("port", port).put("token", token)
+        .put("mac", mac ?: "").put("dev", dev).toString()
 
     companion object {
         fun fromJson(json: String): LinkInfo {
@@ -44,6 +50,7 @@ data class LinkInfo(
             return LinkInfo(
                 o.getString("ssid"), o.getString("pass"), o.getString("host"),
                 o.getInt("port"), o.getString("token"),
+                o.optString("mac").ifEmpty { null }, o.optString("dev"),
             )
         }
     }
@@ -121,3 +128,6 @@ fun formatBytes(bytes: Long): String {
     }
     return "%.1f %s".format(value, units[i])
 }
+
+fun deviceDescription(): String =
+    "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"

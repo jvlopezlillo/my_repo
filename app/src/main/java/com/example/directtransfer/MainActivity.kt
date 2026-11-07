@@ -38,7 +38,10 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -200,6 +203,23 @@ class MainActivity : ComponentActivity() {
             style = MaterialTheme.typography.bodySmall,
         )
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
+        if (state.error != null && state.log.isNotEmpty()) {
+            val clip = LocalClipboardManager.current
+            val report = state.error + "\n\n" + state.log.joinToString("\n")
+            Text(
+                state.log.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            OutlinedButton(
+                onClick = {
+                    clip.setText(AnnotatedString(report))
+                    Toast.makeText(this@MainActivity, "Diagnóstico copiado", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.padding(top = 8.dp),
+            ) { Text("Copiar diagnóstico") }
+        }
         if (state.canResume) {
             Button(onClick = { withPermissions { vm.resumeSend() } }, modifier = Modifier.padding(top = 8.dp)) {
                 Text("Reanudar envío")
