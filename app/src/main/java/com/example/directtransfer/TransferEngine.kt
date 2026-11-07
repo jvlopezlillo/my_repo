@@ -43,6 +43,8 @@ data class UiState(
     val canResume: Boolean = false,
     /** Registro de pasos de la conexión (diagnóstico). */
     val log: List<String> = emptyList(),
+    /** Hay un grupo Wi-Fi Direct atascado: el usuario debe apagar y encender el Wi-Fi. */
+    val wifiReset: Boolean = false,
 )
 
 /**
@@ -295,6 +297,7 @@ class TransferEngine private constructor(private val app: Application) {
         _state.update {
             it.copy(
                 busy = false, incoming = null, canResume = canResume, status = "",
+                wifiReset = e is StaleGroupException,
                 error = (e.message ?: e.javaClass.simpleName) +
                     if (canResume) "\nPuedes reanudar: lo ya enviado no se repite." else "",
             )

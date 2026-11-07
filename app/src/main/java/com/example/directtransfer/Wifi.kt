@@ -23,6 +23,11 @@ import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -31,6 +36,9 @@ import java.io.IOException
 import javax.net.SocketFactory
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+/** Hay un grupo Wi-Fi Direct antiguo que el sistema no deja eliminar (hace falta reiniciar el Wi-Fi). */
+class StaleGroupException(message: String) : IOException(message)
 
 /** Resuelve con null si tuvo éxito, o con el código de error. */
 private fun p2pCodeListener(c: CancellableContinuation<Int?>) =
@@ -60,6 +68,10 @@ fun wifiStateDescription(ctx: Context): String {
  */
 @SuppressLint("MissingPermission")
 class WifiDirectHost(private val ctx: Context) {
+    private companion object {
+        val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    }
+
     private val manager = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private var channel: WifiP2pManager.Channel? = null
 
@@ -68,7 +80,7 @@ class WifiDirectHost(private val ctx: Context) {
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         if (!wifi.isWifiEnabled) throw IOException("Activa el Wi-Fi (no hace falta estar conectado a ninguna red)")
 
-        val ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
+        var ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
         channel = ch
         log("Wi-Fi: ${wifiStateDescription(ctx)}")
 
@@ -83,11 +95,21 @@ class WifiDirectHost(private val ctx: Context) {
             }
             runCatching { mgr.stopPeerDiscovery(ch, null) }
             runCatching { mgr.cancelConnect(ch, null) }
-            for (i in 1..6) {
-                val err: Int? = suspendCancellableCoroutine { c -> mgr.removeGroup(ch, p2pCodeListener(c)) }
-                log("Eliminar grupo anterior: ${err?.let { describe(it) } ?: "OK"}")
-                delay(1_000)
-                if (groupInfo(mgr, ch) == null) break
+            delay(500)
+            var gone = removeGroupWithRetries(mgr, ch, 6, log)
+            if (!gone) {
+                // Segundo intento con un canal nuevo (el grupo puede estar ligado a un canal anterior).
+                log("Reiniciando el canal Wi-Fi Direct de la app…")
+                if (Build.VERSION.SDK_INT >= 27) runCatching { ch.close() }
+                ch = mgr.initialize(ctx, Looper.getMainLooper(), null)
+                channel = ch
+                gone = removeGroupWithRetries(mgr, ch, 4, log)
+            }
+            if (!gone) {
+                throw StaleGroupException(
+                    "Hay un grupo Wi-Fi Direct anterior («${existing.networkName}») que Android no deja eliminar. " +
+                        "Apaga y vuelve a encender el Wi-Fi de este móvil (o reinícialo) y pulsa Recibir otra vez.",
+                )
             }
         }
 
@@ -155,9 +177,14 @@ class WifiDirectHost(private val ctx: Context) {
         if (onlyOurs && !ssid.startsWith("DIRECT-dt-")) return null
         return LinkInfo(
             ssid, pass, Protocol.DEFAULT_GROUP_OWNER_IP, Protocol.TCP_PORT, token,
-            g.owner?.deviceAddress, deviceDescription(), g.owner?.deviceName.orEmpty(),
+            g.owner?.deviceAddress, deviceDescription(), p2pDeviceName(g),
         )
     }
+
+    private fun p2pDeviceName(g: WifiP2pGroup): String =
+        g.owner?.deviceName?.takeIf { it.isNotEmpty() }
+            ?: android.provider.Settings.Global.getString(ctx.contentResolver, "device_name")
+            ?: Build.MODEL
 
     private fun describe(code: Int) = when (code) {
         WifiP2pManager.ERROR -> "error interno"
@@ -166,12 +193,33 @@ class WifiDirectHost(private val ctx: Context) {
         else -> "código $code"
     }
 
+    /** Elimina el grupo y ESPERA a que desaparezca antes de cerrar el canal (si no, queda un grupo huérfano). */
     fun stop() {
         val mgr = manager ?: return
         val ch = channel ?: return
-        runCatching { mgr.removeGroup(ch, null) }
-        if (Build.VERSION.SDK_INT >= 27) runCatching { ch.close() }
         channel = null
+        cleanupScope.launch {
+            repeat(5) {
+                if (groupInfo(mgr, ch) == null) return@repeat
+                withTimeoutOrNull(3_000) {
+                    suspendCancellableCoroutine<Int?> { c -> mgr.removeGroup(ch, p2pCodeListener(c)) }
+                }
+                delay(1_000)
+            }
+            if (Build.VERSION.SDK_INT >= 27) runCatching { ch.close() }
+        }
+    }
+
+    private suspend fun removeGroupWithRetries(
+        mgr: WifiP2pManager, ch: WifiP2pManager.Channel, tries: Int, log: (String) -> Unit,
+    ): Boolean {
+        repeat(tries) {
+            val err: Int? = suspendCancellableCoroutine { c -> mgr.removeGroup(ch, p2pCodeListener(c)) }
+            log("Eliminar grupo anterior: ${err?.let { describe(it) } ?: "OK"}")
+            delay(1_000)
+            if (groupInfo(mgr, ch) == null) return true
+        }
+        return false
     }
 
     private suspend fun groupInfo(mgr: WifiP2pManager, ch: WifiP2pManager.Channel): WifiP2pGroup? =

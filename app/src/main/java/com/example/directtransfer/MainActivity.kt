@@ -1,9 +1,11 @@
 package com.example.directtransfer
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -278,6 +280,14 @@ class MainActivity : ComponentActivity() {
         state.error?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error)
+        }
+        if (state.wifiReset) {
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = {
+                val intent = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+                else Intent(Settings.ACTION_WIFI_SETTINGS)
+                runCatching { startActivity(intent) }
+            }) { Text("Abrir ajustes de Wi-Fi") }
         }
 
         Spacer(Modifier.height(24.dp))
