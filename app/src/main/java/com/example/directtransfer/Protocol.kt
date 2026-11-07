@@ -1,0 +1,115 @@
+package com.example.directtransfer
+
+import android.net.Uri
+import android.os.SystemClock
+import org.json.JSONObject
+import java.io.IOException
+import java.security.SecureRandom
+import java.util.UUID
+
+object Protocol {
+    /** Servicio BLE que anuncia el receptor. */
+    val SERVICE_UUID: UUID = UUID.fromString("7d1f0001-5b0e-4c1a-9c55-3f6a2d9e1b10")
+
+    /** Característica legible con los datos de la red Wi-Fi Direct (JSON de [LinkInfo]). */
+    val LINK_CHAR_UUID: UUID = UUID.fromString("7d1f0002-5b0e-4c1a-9c55-3f6a2d9e1b10")
+
+    const val TCP_PORT = 8988
+    const val MAGIC = 0x44545231 // "DTR1"
+    const val BUFFER_SIZE = 256 * 1024
+    const val DEFAULT_GROUP_OWNER_IP = "192.168.49.1"
+
+    private const val ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    private val random = SecureRandom()
+
+    fun randomString(length: Int): String =
+        buildString { repeat(length) { append(ALPHABET[random.nextInt(ALPHABET.length)]) } }
+}
+
+/** Datos para unirse a la red creada por el receptor. */
+data class LinkInfo(
+    val ssid: String,
+    val passphrase: String,
+    val host: String,
+    val port: Int,
+    val token: String,
+) {
+    fun toJson(): String = JSONObject()
+        .put("ssid", ssid).put("pass", passphrase).put("host", host)
+        .put("port", port).put("token", token).toString()
+
+    companion object {
+        fun fromJson(json: String): LinkInfo {
+            val o = JSONObject(json)
+            return LinkInfo(
+                o.getString("ssid"), o.getString("pass"), o.getString("host"),
+                o.getInt("port"), o.getString("token"),
+            )
+        }
+    }
+}
+
+/** Un fichero a enviar. [relativePath] conserva la estructura de carpetas ("dir/sub/a.txt"). */
+data class SendItem(val uri: Uri, val relativePath: String, val size: Long)
+
+data class IncomingRequest(val senderName: String, val fileCount: Int, val totalBytes: Long)
+
+data class Progress(
+    val fileName: String = "",
+    val fileIndex: Int = 0,
+    val fileCount: Int = 0,
+    val bytesDone: Long = 0,
+    val totalBytes: Long = 0,
+    val bytesPerSecond: Long = 0,
+) {
+    val percent: Int
+        get() = if (totalBytes <= 0) 100 else (bytesDone * 100 / totalBytes).toInt().coerceIn(0, 100)
+}
+
+class RejectedException : IOException("El otro dispositivo rechazó la transferencia")
+
+/** Calcula el progreso global y limita la frecuencia de actualización de la UI. */
+class ProgressTracker(
+    private val fileCount: Int,
+    private val totalBytes: Long,
+    private val emit: (Progress) -> Unit,
+) {
+    private val start = SystemClock.elapsedRealtime()
+    private var lastEmit = 0L
+    private var done = 0L
+    private var fileName = ""
+    private var fileIndex = 0
+
+    fun startFile(index: Int, name: String) {
+        fileIndex = index
+        fileName = name
+        push(true)
+    }
+
+    fun add(bytes: Int) {
+        done += bytes
+        push(false)
+    }
+
+    fun finish() = push(true)
+
+    private fun push(force: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastEmit < 100) return
+        lastEmit = now
+        val elapsed = (now - start).coerceAtLeast(1)
+        emit(Progress(fileName, fileIndex, fileCount, done, totalBytes, done * 1000 / elapsed))
+    }
+}
+
+fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val units = arrayOf("KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var i = -1
+    while (value >= 1024 && i < units.lastIndex) {
+        value /= 1024
+        i++
+    }
+    return "%.1f %s".format(value, units[i])
+}
