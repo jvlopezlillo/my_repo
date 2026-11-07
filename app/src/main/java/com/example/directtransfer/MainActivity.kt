@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -155,6 +156,18 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = { withPermissions { vm.startReceiving() } }, modifier = Modifier.fillMaxWidth()) {
                 Text("Recibir")
+            }
+            Spacer(Modifier.height(24.dp))
+            val compat by vm.state.collectAsStateWithLifecycle()
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Switch(checked = compat.compat24, onCheckedChange = { vm.setCompat24(it) })
+                Column {
+                    Text("Modo compatible (2,4 GHz)")
+                    Text(
+                        "Más lento. Actívalo solo si el modo rápido no consigue conectar. Se aplica en el móvil que recibe.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
     }

@@ -45,6 +45,8 @@ data class UiState(
     val log: List<String> = emptyList(),
     /** Hay un grupo Wi-Fi Direct atascado: el usuario debe apagar y encender el Wi-Fi. */
     val wifiReset: Boolean = false,
+    /** Modo compatible: grupo Wi-Fi Direct en 2,4 GHz (más lento). */
+    val compat24: Boolean = false,
 )
 
 /**
@@ -53,7 +55,8 @@ data class UiState(
  */
 class TransferEngine private constructor(private val app: Application) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val _state = MutableStateFlow(UiState())
+    private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val _state = MutableStateFlow(UiState(compat24 = prefs.getBoolean("compat24", false)))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var job: Job? = null
@@ -85,11 +88,16 @@ class TransferEngine private constructor(private val app: Application) {
 
     // ---------------------------------------------------------------- navegación
 
-    fun openSend() = _state.update { UiState(screen = Screen.SEND, items = it.items) }
+    fun setCompat24(on: Boolean) {
+        prefs.edit().putBoolean("compat24", on).apply()
+        _state.update { it.copy(compat24 = on) }
+    }
+
+    fun openSend() = _state.update { UiState(screen = Screen.SEND, items = it.items, compat24 = it.compat24) }
 
     fun goHome() {
         cancelAll()
-        _state.value = UiState()
+        _state.value = UiState(compat24 = _state.value.compat24)
     }
 
     // ---------------------------------------------------------------- EMISOR
@@ -221,15 +229,17 @@ class TransferEngine private constructor(private val app: Application) {
             _state.value = UiState(screen = Screen.RECEIVE, error = msg)
             return
         }
+        val compat = _state.value.compat24
         _state.value = UiState(
             screen = Screen.RECEIVE, busy = true, status = "Creando red Wi-Fi propia…",
-            log = listOf("Receptor: ${deviceDescription()}"),
+            log = listOf("Receptor: ${deviceDescription()}", "Modo: ${if (compat) "compatible (2,4 GHz)" else "rápido (banda automática)"}"),
+            compat24 = compat,
         )
         startService()
         job = scope.launch {
             try {
                 val token = Protocol.randomString(16)
-                val link = WifiDirectHost(app).also { wifiHost = it }.start(token) { msg -> addLog(msg) }
+                val link = WifiDirectHost(app).also { wifiHost = it }.start(token, compat) { msg -> addLog(msg) }
                 val rx = FileReceiver(app, token, Protocol.TCP_PORT).also { receiver = it }
                 rx.open()
                 _state.update { it.copy(status = "Activando Bluetooth…") }
@@ -241,6 +251,7 @@ class TransferEngine private constructor(private val app: Application) {
                         val d = CompletableDeferred<Boolean>().also { decision = it }
                         _state.update { it.copy(incoming = req, status = "Petición de transferencia") }
                         val ok = d.await()
+                        if (ok) bleHost?.stopAdvertising() // Bluetooth y Wi-Fi se estorban: fuera durante la transferencia
                         _state.update {
                             it.copy(
                                 incoming = null,
@@ -252,6 +263,8 @@ class TransferEngine private constructor(private val app: Application) {
                     onProgress = { p -> _state.update { st -> st.copy(progress = p) } },
                     onInterrupted = { msg ->
                         if (job?.isActive == true) {
+                            // Permitir que el emisor vuelva a encontrarnos para reanudar.
+                            scope.launch { runCatching { bleHost?.startAdvertising() } }
                             _state.update {
                                 it.copy(
                                     incoming = null,

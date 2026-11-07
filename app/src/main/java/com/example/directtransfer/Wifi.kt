@@ -79,7 +79,7 @@ class WifiDirectHost(private val ctx: Context) {
     private val manager = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private var channel: WifiP2pManager.Channel? = null
 
-    suspend fun start(token: String, log: (String) -> Unit = {}): LinkInfo {
+    suspend fun start(token: String, compat24: Boolean = false, log: (String) -> Unit = {}): LinkInfo {
         val mgr = manager ?: throw IOException("Wi-Fi Direct no disponible en este dispositivo")
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         if (!wifi.isWifiEnabled) throw IOException("Activa el Wi-Fi (no hace falta estar conectado a ninguna red)")
@@ -142,8 +142,15 @@ class WifiDirectHost(private val ctx: Context) {
             } else null
 
         val plans = buildList<Pair<String, WifiP2pConfig?>> {
-            cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)?.let { add("2,4 GHz" to it); add("2,4 GHz" to it) }
-            cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_AUTO)?.let { add("banda automática" to it) }
+            if (compat24) {
+                // Modo compatible: 2,4 GHz (más lento, pero lo soporta cualquier móvil).
+                cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)?.let { add("2,4 GHz" to it); add("2,4 GHz" to it) }
+                cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_AUTO)?.let { add("banda automática" to it) }
+            } else {
+                // Modo rápido: el sistema elige la mejor banda (5 GHz si es posible).
+                cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_AUTO)?.let { add("banda automática" to it); add("banda automática" to it) }
+                cfgFor(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)?.let { add("2,4 GHz" to it) }
+            }
             add("sin configuración" to null)
             add("sin configuración" to null)
         }
@@ -173,7 +180,7 @@ class WifiDirectHost(private val ctx: Context) {
         // Esperar a que el grupo esté formado y tenga credenciales.
         repeat(40) {
             readyGroup(mgr, ch, token)?.let {
-                log("Grupo listo: ${it.ssid}" + if (it.ssid.startsWith("DIRECT-dt-")) " (2,4 GHz forzado)" else " (nombre del sistema: banda no controlada)")
+                log("Grupo listo: ${it.ssid}" + if (it.ssid.startsWith("DIRECT-dt-")) " (configuración propia)" else " (nombre del sistema)")
                 return it
             }
             delay(250)

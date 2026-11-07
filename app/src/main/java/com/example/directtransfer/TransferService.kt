@@ -157,7 +157,8 @@ class TransferService : Service() {
         }
         if (wifiLock == null) {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DirectTransfer:wifi").apply {
+            val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wifiLock = wm.createWifiLock(mode, "DirectTransfer:wifi").apply {
                 setReferenceCounted(false)
                 acquire()
             }

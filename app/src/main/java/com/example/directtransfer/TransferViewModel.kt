@@ -11,6 +11,7 @@ class TransferViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> = engine.state
 
     fun openSend() = engine.openSend()
+    fun setCompat24(on: Boolean) = engine.setCompat24(on)
     fun goHome() = engine.goHome()
     fun addFiles(uris: List<Uri>) = engine.addFiles(uris)
     fun addFolder(tree: Uri?) = engine.addFolder(tree)

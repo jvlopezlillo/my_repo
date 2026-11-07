@@ -79,6 +79,14 @@ class BleHost(private val ctx: Context) {
         srv.addService(service)
         serviceAdded.await()
 
+        advertiser = adv
+        startAdvertising()
+    }
+
+    /** Empieza (o reanuda) el anuncio BLE. */
+    suspend fun startAdvertising() {
+        val adv = advertiser ?: throw IOException("Bluetooth LE no iniciado")
+        if (advCallback != null) return // ya anunciándose
         val started = CompletableDeferred<Unit>()
         val cb = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
@@ -90,7 +98,6 @@ class BleHost(private val ctx: Context) {
             }
         }
         advCallback = cb
-        advertiser = adv
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
@@ -102,13 +109,26 @@ class BleHost(private val ctx: Context) {
             .addServiceUuid(ParcelUuid(Protocol.SERVICE_UUID))
             .build()
         val scanResponse = AdvertiseData.Builder().setIncludeDeviceName(true).build()
-        adv.startAdvertising(settings, data, scanResponse, cb)
-        started.await()
+        try {
+            adv.startAdvertising(settings, data, scanResponse, cb)
+            started.await()
+        } catch (e: Exception) {
+            advCallback = null
+            throw e
+        }
+    }
+
+    /**
+     * Para el anuncio BLE. Durante la transferencia Bluetooth y Wi-Fi comparten la banda de 2,4 GHz
+     * (y normalmente el chip), así que el anuncio continuo reduce mucho la velocidad.
+     */
+    fun stopAdvertising() {
+        advCallback?.let { runCatching { advertiser?.stopAdvertising(it) } }
+        advCallback = null
     }
 
     fun stop() {
-        advCallback?.let { runCatching { advertiser?.stopAdvertising(it) } }
-        advCallback = null
+        stopAdvertising()
         runCatching { server?.close() }
         server = null
     }

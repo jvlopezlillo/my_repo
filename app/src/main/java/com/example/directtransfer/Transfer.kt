@@ -115,6 +115,7 @@ class FileSender(private val ctx: Context) {
         try {
             sock.tcpNoDelay = true
             sock.soTimeout = 0
+            runCatching { sock.sendBufferSize = 1 shl 20 }
             val out = DataOutputStream(BufferedOutputStream(sock.getOutputStream(), Protocol.BUFFER_SIZE))
             val inp = DataInputStream(sock.getInputStream())
 
@@ -206,6 +207,7 @@ class FileReceiver(private val ctx: Context, private val token: String, private 
         stagingRoot.listFiles()?.forEach { if (it.lastModified() < limit) it.deleteRecursively() }
         server = ServerSocket().apply {
             reuseAddress = true
+            runCatching { receiveBufferSize = 1 shl 20 } // antes de bind: la ventana TCP se negocia al aceptar
             bind(InetSocketAddress(port))
         }
     }
