@@ -57,11 +57,26 @@ class WifiDirectHost(private val ctx: Context) {
             delay(1_000)
         }
 
-        // Crear el grupo; si el sistema está ocupado se reintenta.
+        // Android 10+: grupo forzado a 2,4 GHz (compatible con cualquier móvil; en 5 GHz algunos no se unen).
+        val cfg: WifiP2pConfig? = if (Build.VERSION.SDK_INT >= 29) {
+            runCatching {
+                WifiP2pConfig.Builder()
+                    .setNetworkName("DIRECT-dt-" + Protocol.randomString(4))
+                    .setPassphrase(Protocol.randomString(12))
+                    .enablePersistentMode(false)
+                    .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+                    .build()
+            }.getOrNull()
+        } else null
+
+        // Crear el grupo; si el sistema está ocupado se reintenta. Los últimos intentos van sin configuración.
         var lastCode = -1
         var created = false
         for (attempt in 1..6) {
-            val err: Int? = suspendCancellableCoroutine { c -> mgr.createGroup(ch, codeListener(c)) }
+            val useCfg = cfg != null && attempt <= 3
+            val err: Int? = suspendCancellableCoroutine { c ->
+                if (useCfg) mgr.createGroup(ch, cfg, codeListener(c)) else mgr.createGroup(ch, codeListener(c))
+            }
             if (err == null) {
                 created = true
                 break
@@ -159,18 +174,28 @@ class WifiClientLink(private val ctx: Context) {
     suspend fun connect(ssid: String, passphrase: String, fallbackHost: String, onStatus: (String) -> Unit): Link {
         if (Build.VERSION.SDK_INT >= 29) {
             onStatus("Uniéndose al grupo Wi-Fi Direct del receptor…")
+            var p2pError: String? = null
             val first = try {
                 connectP2p(ssid, passphrase, fallbackHost)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                p2pError = e.message ?: e.javaClass.simpleName
                 releaseP2p()
                 null
             }
             if (first != null) return first
             onStatus("Probando conexión Wi-Fi clásica… (Android puede pedir confirmación)")
-            val network = connectModern(ssid, passphrase)
-            return Link(network.socketFactory, listOfNotNull(gatewayOf(network), fallbackHost).distinct())
+            try {
+                val network = connectModern(ssid, passphrase)
+                return Link(network.socketFactory, listOfNotNull(gatewayOf(network), fallbackHost).distinct())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                throw IOException(
+                    "No se pudo unir a la red «$ssid».\n• Wi-Fi Direct: $p2pError\n• Wi-Fi clásica: ${e.message}",
+                )
+            }
         }
         val network = connectLegacy(ssid, passphrase)
         return Link(network.socketFactory, listOfNotNull(gatewayOf(network), fallbackHost).distinct())
