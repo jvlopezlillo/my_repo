@@ -44,7 +44,7 @@ data class LinkInfo(
     fun toJson(): String = JSONObject()
         .put("ssid", ssid).put("pass", passphrase).put("host", host)
         .put("port", port).put("token", token)
-        .put("mac", mac ?: "").put("dev", dev).put("pname", pname).toString()
+        .put("mac", mac?.takeIf { it != "02:00:00:00:00:00" } ?: "").put("dev", dev).put("pname", pname).toString()
 
     companion object {
         fun fromJson(json: String): LinkInfo {

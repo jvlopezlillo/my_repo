@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -42,6 +43,7 @@ class BleHost(private val ctx: Context) {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var advCallback: AdvertiseCallback? = null
     @Volatile private var payload = ByteArray(0)
+    private val mtus = ConcurrentHashMap<String, Int>()
 
     suspend fun start(linkJson: String) {
         payload = linkJson.toByteArray(Charsets.UTF_8)
@@ -57,12 +59,22 @@ class BleHost(private val ctx: Context) {
                 else serviceAdded.completeExceptionally(IOException("No se pudo registrar el servicio BLE ($status)"))
             }
 
+            override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
+                mtus[device.address] = mtu
+            }
+
+            override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) mtus.remove(device.address)
+            }
+
             override fun onCharacteristicReadRequest(
                 device: BluetoothDevice, requestId: Int, offset: Int,
                 characteristic: BluetoothGattCharacteristic,
             ) {
                 val data = payload
-                val chunk = if (offset <= data.size) data.copyOfRange(offset, data.size) else ByteArray(0)
+                // Se trocea de forma explícita según el MTU pactado (23 por defecto => 22 bytes útiles).
+                val maxChunk = ((mtus[device.address] ?: 23) - 1).coerceAtLeast(1)
+                val chunk = if (offset <= data.size) data.copyOfRange(offset, minOf(data.size, offset + maxChunk)) else ByteArray(0)
                 server?.sendResponse(device, requestId, android.bluetooth.BluetoothGatt.GATT_SUCCESS, offset, chunk)
             }
         }) ?: throw IOException("No se pudo abrir el servidor GATT")
@@ -193,10 +205,15 @@ suspend fun readLinkInfo(ctx: Context, device: BluetoothDevice): String =
         val cb = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                    g.discoverServices()
+                    // MTU grande: el mensaje cabe en una sola lectura (las lecturas largas fallan en algunos móviles).
+                    if (!g.requestMtu(517)) g.discoverServices()
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
                     fail(g, "Conexión Bluetooth perdida (estado $status)")
                 }
+            }
+
+            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                g.discoverServices()
             }
 
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
