@@ -87,7 +87,7 @@ class CoreTest {
             .put(pj("Mediocre", "centrocampista", 3.0, 3.0))
             .put(pj("Roto", "delantero", 9.0, 9.0, status = "injured")))
         val info = TeamInfo(budget = 1_000_000, teamValue = 200_000_000, maxPlayers = 18, position = 10)
-        val buys = MarketReview.buyRecommendations(market, players, emptySet(), emptyMap(), info)
+        val buys = MarketReview.buyRecommendations(market, players, emptySet(), listOf(emptyMap()), info)
         assertEquals(listOf("Crack"), buys.map { it.player.name })
         assertTrue(buys[0].suggestedBid > 30_000_000)
     }

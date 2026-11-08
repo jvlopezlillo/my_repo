@@ -2,6 +2,8 @@ package com.futmondo.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.TimePickerDialog
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
@@ -13,24 +15,19 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.futmondo.core.FutmondoApi
 import com.futmondo.core.FutmondoException
-import com.futmondo.core.FutmondoService
 import com.futmondo.core.History
-import com.futmondo.core.HistoryEntry
-import com.futmondo.core.HistoryKind
-import com.futmondo.core.MarketResult
 import com.futmondo.core.Reports
 import com.futmondo.core.SellCandidate
 
 /**
- * Dos botones: Analizar y Revisar mercado.
- * La app solo PONE A LA VENTA, y únicamente lo que el usuario marca y confirma. No pujó nunca,
- * no hace venta directa, no responde ofertas y no cambia la alineación.
+ * Botones: Analizar, Revisar mercado, Historial, Precisión y revisión diaria.
+ * La app solo PONE A LA VENTA, y únicamente lo que el usuario marca y confirma. No puja nunca,
+ * no hace venta directa, no responde ofertas y no cambia la alineación. La revisión diaria solo avisa.
  */
 class MainActivity : Activity() {
     private lateinit var store: SessionStore
-    private lateinit var historyPrefs: android.content.SharedPreferences
+    private lateinit var controller: Controller
     private val api = FutmondoApi(AndroidHttp())
-    private val service = FutmondoService(api)
 
     private lateinit var loginBox: LinearLayout
     private lateinit var mainBox: LinearLayout
@@ -40,13 +37,15 @@ class MainActivity : Activity() {
     private lateinit var result: TextView
     private lateinit var sellBox: LinearLayout
     private lateinit var sellButton: Button
+    private lateinit var dailyCheck: CheckBox
+    private lateinit var dailyHourButton: Button
     private val buttons = ArrayList<Button>()
     private val checks = ArrayList<Pair<CheckBox, SellCandidate>>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SessionStore(this)
-        historyPrefs = getSharedPreferences("history", MODE_PRIVATE)
+        controller = Controller(this, api)
         setContentView(buildUi())
         val s = store.load()
         if (s != null) {
@@ -76,12 +75,13 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
-        val warning = text(
-            "⚠ Esta app usa la API NO oficial de Futmondo. Puede dejar de funcionar en cualquier " +
-                "momento y su uso podría ir contra las condiciones de uso de Futmondo. Úsala bajo tu responsabilidad.",
-            12f,
+        root.addView(
+            text(
+                "⚠ Esta app usa la API NO oficial de Futmondo. Puede dejar de funcionar en cualquier " +
+                    "momento y su uso podría ir contra las condiciones de uso de Futmondo. Úsala bajo tu responsabilidad.",
+                12f,
+            ),
         )
-        root.addView(warning)
 
         loginBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         email = EditText(this).apply {
@@ -100,10 +100,28 @@ class MainActivity : Activity() {
         mainBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mainBox.addView(button("Analizar") { runAnalyze() })
         mainBox.addView(button("Revisar mercado") { runMarket() })
-        mainBox.addView(button("Historial") { showHistory() })
-        mainBox.addView(button("Borrar historial") { saveHistory(emptyList()); clearSells(); result.text = "Historial borrado." })
+        mainBox.addView(button("Historial") { clearSells(); result.text = History.format(controller.data.history()) })
+        mainBox.addView(button("Precisión del modelo") { runPrecision() })
+
+        dailyCheck = CheckBox(this).apply {
+            text = "Revisión diaria automática (solo avisa, no cambia nada)"
+            isChecked = controller.data.dailyEnabled
+            setOnCheckedChangeListener { _, on -> setDaily(on) }
+        }
+        mainBox.addView(dailyCheck)
+        dailyHourButton = button("") { pickHour() }
+        updateHourLabel()
+        mainBox.addView(dailyHourButton)
+
+        mainBox.addView(button("Borrar historial") {
+            controller.data.clearHistory(); clearSells(); result.text = "Historial borrado."
+        })
         mainBox.addView(button("Cerrar sesión") {
-            store.clear(); api.setSession(null); result.text = ""; clearSells(); showLogin()
+            store.clear(); api.setSession(null); result.text = ""; clearSells()
+            controller.data.dailyEnabled = false
+            dailyCheck.isChecked = false
+            DailyReview.cancel(this)
+            showLogin()
         })
         root.addView(mainBox)
 
@@ -118,6 +136,35 @@ class MainActivity : Activity() {
         root.addView(sellButton)
 
         return ScrollView(this).apply { addView(root) }
+    }
+
+    private fun updateHourLabel() {
+        dailyHourButton.text = "Hora de la revisión diaria: %02d:00".format(controller.data.dailyHour)
+    }
+
+    private fun setDaily(on: Boolean) {
+        controller.data.dailyEnabled = on
+        if (on) {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
+            }
+            DailyReview.schedule(this, controller.data.dailyHour)
+            status.text = "Revisión diaria activada. Android puede retrasarla unos minutos; " +
+                "desactiva la optimización de batería para esta app si quieres más puntualidad."
+        } else {
+            DailyReview.cancel(this)
+            status.text = "Revisión diaria desactivada."
+        }
+    }
+
+    private fun pickHour() {
+        TimePickerDialog(this, { _, h, _ ->
+            controller.data.dailyHour = h
+            updateHourLabel()
+            if (controller.data.dailyEnabled) DailyReview.schedule(this, h)
+        }, controller.data.dailyHour, 0, true).show()
     }
 
     private fun showLogin() {
@@ -152,8 +199,7 @@ class MainActivity : Activity() {
 
     private fun showError(e: Throwable) {
         val msg = when {
-            e is FutmondoException && (e.code == "http.401" || e.code == "http.403" || e.code.contains("auth") || e.code.contains("token")) ->
-                "La sesión ha caducado. Cierra sesión y vuelve a entrar."
+            e is FutmondoException && e.isAuth -> "La sesión ha caducado. Cierra sesión y vuelve a entrar."
             e is FutmondoException -> "Futmondo devolvió un error: ${e.code}"
             e is java.io.IOException -> "No se pudo conectar con Futmondo. Revisa tu conexión."
             else -> "Error inesperado (¿ha cambiado la API?): ${e.message}"
@@ -175,39 +221,36 @@ class MainActivity : Activity() {
 
     private fun runAnalyze() {
         clearSells()
-        background("Analizando…", { service.analyze() }) { a ->
-            result.text = Reports.analysis(a)
-            record(HistoryKind.ANALISIS, History.analysisSummary(a))
-        }
+        background("Analizando…", { controller.analyze() }) { result.text = Reports.analysis(it) }
     }
 
     private fun runMarket() {
         clearSells()
-        background("Revisando mercado…", { service.reviewMarket() }) { m ->
+        background("Revisando mercado…", { controller.reviewMarket() }) { m ->
             result.text = Reports.market(m)
-            record(HistoryKind.MERCADO, History.marketSummary(m))
-            showSellChoices(m)
+            if (m.sells.isEmpty()) return@background
+            sellBox.addView(text("Elige qué poner a la venta (nada se vende hasta que confirmes):"))
+            for (c in m.sells) {
+                val cb = CheckBox(this).apply {
+                    text = "${c.player.name} – ${Reports.money(c.price)}"
+                    isChecked = c.preselected
+                }
+                checks.add(cb to c)
+                sellBox.addView(cb)
+            }
+            sellButton.visibility = View.VISIBLE
         }
+    }
+
+    private fun runPrecision() {
+        clearSells()
+        background("Calculando precisión…", { controller.precisionReport() }) { result.text = it }
     }
 
     private fun clearSells() {
         sellBox.removeAllViews()
         checks.clear()
         sellButton.visibility = View.GONE
-    }
-
-    private fun showSellChoices(m: MarketResult) {
-        if (m.sells.isEmpty()) return
-        sellBox.addView(text("Elige qué poner a la venta (nada se vende hasta que confirmes):"))
-        for (c in m.sells) {
-            val cb = CheckBox(this).apply {
-                text = "${c.player.name} – ${Reports.money(c.price)}"
-                isChecked = c.preselected
-            }
-            checks.add(cb to c)
-            sellBox.addView(cb)
-        }
-        sellButton.visibility = View.VISIBLE
     }
 
     private fun confirmSell() {
@@ -223,29 +266,13 @@ class MainActivity : Activity() {
     }
 
     private fun doSell(chosen: List<SellCandidate>) {
-        background("Poniendo a la venta…", { service.putOnSale(chosen) }) { failures ->
+        background("Poniendo a la venta…", { controller.putOnSale(chosen) }) { failures ->
             val ok = chosen.size - failures.size
             result.text = buildString {
                 append("Puestos a la venta: $ok de ${chosen.size}.\n")
                 failures.forEach { append("✗ ${it.first.player.name}: ${it.second}\n") }
             }
-            record(HistoryKind.VENTA, History.saleSummary(chosen, failures))
             clearSells()
         }
-    }
-
-    private fun loadHistory() = History.fromJson(historyPrefs.getString("entries", null))
-
-    private fun saveHistory(l: List<HistoryEntry>) {
-        historyPrefs.edit().putString("entries", History.toJson(l)).apply()
-    }
-
-    private fun record(kind: HistoryKind, summary: String) {
-        saveHistory(History.add(loadHistory(), HistoryEntry(System.currentTimeMillis(), kind, summary)))
-    }
-
-    private fun showHistory() {
-        clearSells()
-        result.text = History.format(loadHistory())
     }
 }

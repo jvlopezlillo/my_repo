@@ -23,4 +23,5 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    implementation("androidx.work:work-runtime:2.9.1")
 }

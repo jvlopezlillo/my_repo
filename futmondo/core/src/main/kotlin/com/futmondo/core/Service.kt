@@ -2,7 +2,14 @@ package com.futmondo.core
 
 import java.util.Locale
 
-data class Analysis(val current: Lineup, val plans: List<LineupPlan>, val info: TeamInfo, val roster: List<Player>) {
+data class Analysis(
+    val current: Lineup,
+    val plans: List<LineupPlan>,
+    val info: TeamInfo,
+    val roster: List<Player>,
+    val round: Int = 0,
+    val prediction: Prediction? = null,
+) {
     val best get() = plans.first()
 }
 
@@ -12,29 +19,61 @@ data class MarketResult(
     val info: TeamInfo,
     val rosterSize: Int,
     val alreadyOnMarket: List<Player>,
+    /** Jornadas de calendario tenidas en cuenta para los fichajes. */
+    val horizon: Int = 1,
 )
 
 /** Casos de uso de los dos botones. Solo leen datos; nada se ejecuta sin que el usuario lo confirme. */
 class FutmondoService(private val api: FutmondoApi) {
 
-    fun analyze(): Analysis {
-        val roster = api.roster()
-        val fixtures = api.nextFixtures()
-        val plans = Analyzer.plans(Analyzer.score(roster, fixtures))
-        require(plans.isNotEmpty()) { "Plantilla insuficiente para formar un once" }
-        return Analysis(api.lineup(), plans, api.teamInfo(), roster)
+    companion object {
+        const val HORIZON = 3
+        private const val MAX_ROUNDS_TO_RESOLVE = 3
     }
 
-    fun reviewMarket(): MarketResult {
+    fun analyze(cal: Calibration = Calibration.NONE): Analysis {
         val roster = api.roster()
-        val fixtures = api.nextFixtures()
-        val plans = Analyzer.plans(Analyzer.score(roster, fixtures))
+        val next = api.upcomingRounds(1).first()
+        val plans = Analyzer.plans(Analyzer.score(roster, next.byTeam, cal))
+        require(plans.isNotEmpty()) { "Plantilla insuficiente para formar un once" }
+        // La predicción guarda la estimación SIN calibrar, para no realimentar la corrección.
+        val prediction = Prediction(
+            next.number, System.currentTimeMillis(),
+            plans.first().starters.map { PredItem(it.player.id, it.player.name, it.player.role, it.raw) },
+        )
+        return Analysis(api.lineup(), plans, api.teamInfo(), roster, next.number, prediction)
+    }
+
+    fun reviewMarket(cal: Calibration = Calibration.NONE): MarketResult {
+        val roster = api.roster()
+        val rounds = api.upcomingRounds(HORIZON)
+        val plans = Analyzer.plans(Analyzer.score(roster, rounds.first().byTeam, cal))
         val starters = plans.firstOrNull()?.starters?.map { it.player.id }?.toSet().orEmpty()
         val sells = MarketReview.sellCandidates(roster, starters)
         val info = api.teamInfo()
         val sellIds = sells.filter { it.preselected }.map { it.player.id }.toSet()
-        val buys = MarketReview.buyRecommendations(api.marketPlayers(), roster, sellIds, fixtures, info)
-        return MarketResult(sells, buys, info, roster.size, roster.filter { it.onMarket })
+        val buys = MarketReview.buyRecommendations(api.marketPlayers(), roster, sellIds, rounds.map { it.byTeam }, info, cal)
+        return MarketResult(sells, buys, info, roster.size, roster.filter { it.onMarket }, rounds.size)
+    }
+
+    /**
+     * Rellena los puntos reales de las predicciones cuya jornada ya está cerrada (máx. 3 jornadas por llamada).
+     * Si un jugador no tiene dato de esa jornada se deja pendiente.
+     */
+    fun resolve(preds: List<Prediction>): List<Prediction> {
+        if (preds.all { it.resolved }) return preds
+        val closed = api.closedRounds()
+        val targets = preds.filter { !it.resolved && it.round in closed }
+            .sortedByDescending { it.round }.take(MAX_ROUNDS_TO_RESOLVE).map { it.round }.toSet()
+        if (targets.isEmpty()) return preds
+        val cache = HashMap<String, Map<Int, Double>>()
+        return preds.map { p ->
+            if (p.round !in targets) p
+            else p.copy(items = p.items.map { it ->
+                if (it.actual != null) it
+                else it.copy(actual = cache.getOrPut(it.playerId) { api.playerRoundPoints(it.playerId) }[p.round])
+            })
+        }
     }
 
     /** Pone a la venta únicamente los jugadores recibidos (ya confirmados por el usuario). Devuelve fallos. */
@@ -67,6 +106,7 @@ object Reports {
     fun analysis(a: Analysis): String {
         val b = a.best
         val sb = StringBuilder()
+        if (a.round > 0) sb.append("JORNADA ${a.round}\n")
         sb.append("MEJOR FORMACIÓN: ${b.formation}  (${fmt(b.total)} pts esperados)\n")
         sb.append("Formación actual: ${a.current.strategy}\n\n")
         a.plans.take(3).forEach { sb.append("  ${it.formation}: ${fmt(it.total)}\n") }
@@ -104,7 +144,7 @@ object Reports {
         m.sells.forEach {
             sb.append("  • ${it.player.name} (${it.player.role.label}, ${it.player.team}) a ${money(it.price)}: ${it.reasons.joinToString("; ")}\n")
         }
-        sb.append("\nFICHAJES RECOMENDADOS (${m.buys.size})\n")
+        sb.append("\nFICHAJES RECOMENDADOS (${m.buys.size}; calendario de ${m.horizon} jornada${if (m.horizon == 1) "" else "s"})\n")
         if (m.buys.isEmpty()) sb.append("  Ninguno del mercado actual mejora claramente tu once.\n")
         m.buys.forEach {
             sb.append("  • ${it.player.name} (${it.player.role.label}, ${it.player.team}) valor ${money(it.player.value)}; " +

@@ -53,7 +53,10 @@ data class TeamInfo(val budget: Long, val teamValue: Long, val maxPlayers: Int, 
 
 data class Lineup(val strategy: String, val starterIds: List<String>, val benchIds: List<String>)
 
-/** Cómo juega un equipo la próxima jornada. */
+/** Partidos de una jornada, indexados por equipo. */
+data class RoundFixtures(val number: Int, val id: String, val byTeam: Map<String, Fixture>)
+
+/** Cómo juega un equipo en una jornada. */
 data class Fixture(val isHome: Boolean, val opponent: String, val winProb: Double?)
 
 object Parse {
@@ -119,6 +122,11 @@ object Parse {
         val inv = listOf(1 / h, 1 / d, 1 / a)
         val sum = inv.sum()
         return Triple(inv[0] / sum, inv[1] / sum, inv[2] / sum)
+    }
+
+    fun round(answer: JSONObject): RoundFixtures {
+        val r = answer.optJSONObject("round")
+        return RoundFixtures(r?.optInt("number", 0) ?: 0, r?.optString("_id").orEmpty(), fixtures(answer))
     }
 
     /** Devuelve un mapa clave-de-equipo -> Fixture (claves: id y nombre/slug normalizados). */

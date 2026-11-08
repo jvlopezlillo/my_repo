@@ -11,6 +11,7 @@ enum class HistoryKind(val label: String) {
     ANALISIS("Análisis"),
     MERCADO("Revisión de mercado"),
     VENTA("Puesta a la venta"),
+    AUTOMATICA("Revisión diaria"),
 }
 
 data class HistoryEntry(val time: Long, val kind: HistoryKind, val summary: String)

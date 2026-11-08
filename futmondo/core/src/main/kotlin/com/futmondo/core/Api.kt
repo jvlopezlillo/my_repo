@@ -9,7 +9,25 @@ fun interface HttpPoster {
     fun post(path: String, jsonBody: String): String
 }
 
-class FutmondoException(val code: String) : Exception(code)
+class FutmondoException(val code: String) : Exception(code) {
+    /** true si el error indica que la sesión ya no es válida. */
+    val isAuth get() = code == "http.401" || code == "http.403" || code.contains("auth") || code.contains("token")
+}
+
+/**
+ * Ids de jornada candidatos. Son ObjectId: el contador (últimos 6 hex) avanza de 11 en 11, pero la marca
+ * de tiempo (primeros 8 hex) puede variar en unos segundos entre jornadas (visto en el HAR: ...f0 -> ...f1).
+ * Por eso se devuelven varios candidatos y quien los usa debe verificar el número de jornada.
+ */
+object Rounds {
+    fun candidates(id: String, k: Int, tsSpread: Int = 3): List<String> {
+        if (id.length != 24) return emptyList()
+        val ts = id.substring(0, 8).toLong(16)
+        val mid = id.substring(8, 18)
+        val counter = id.substring(18).toLong(16) + 11L * k
+        return (0 until tsSpread).map { "%08x".format(ts + it) + mid + "%06x".format(counter) }
+    }
+}
 
 /**
  * Cliente de la API NO oficial de Futmondo.
@@ -29,9 +47,11 @@ class FutmondoApi(private val http: HttpPoster, private var session: Session? = 
         const val MARKET = "/1/market/players"
         const val MY_MARKET = "/1/market/myplayers"
         const val PUT_ON_MARKET = "/1/market/putonmarket"
+        const val ROUNDS = "/1/userteam/rounds"
+        const val PLAYER_SUMMARY = "/1/player/summary"
 
         /** Rutas de solo lectura permitidas. */
-        val READ_PATHS = setOf(LOGIN, ACTIVE, TEAM_INFO, ROSTER, LINEUP, MATCHES, MARKET, MY_MARKET)
+        val READ_PATHS = setOf(LOGIN, ACTIVE, TEAM_INFO, ROSTER, LINEUP, MATCHES, MARKET, MY_MARKET, ROUNDS, PLAYER_SUMMARY)
 
         /** Única ruta de escritura permitida: poner a la venta. */
         val WRITE_PATHS = setOf(PUT_ON_MARKET)
@@ -90,9 +110,37 @@ class FutmondoApi(private val http: HttpPoster, private var session: Session? = 
 
     fun lineup(): Lineup = Parse.lineup(post(LINEUP, q()))
 
-    /** Partidos de la próxima jornada (roundId nulo = siguiente jornada). */
-    fun nextFixtures(): Map<String, Fixture> =
-        Parse.fixtures(post(MATCHES, q().put("roundId", JSONObject.NULL)))
+    /**
+     * Partidos de la próxima jornada y de las siguientes (hasta [count]). Para las siguientes se deduce el id
+     * de jornada probando candidatos; si ninguno devuelve el número esperado, se corta ahí.
+     */
+    fun upcomingRounds(count: Int): List<RoundFixtures> {
+        val first = Parse.round(post(MATCHES, q().put("roundId", JSONObject.NULL)))
+        val out = arrayListOf(first)
+        if (first.id.isEmpty()) return out
+        for (k in 1 until count) {
+            val r = Rounds.candidates(first.id, k).firstNotNullOfOrNull { cand ->
+                try {
+                    Parse.round(post(MATCHES, q().put("roundId", cand))).takeIf { it.number == first.number + k }
+                } catch (e: FutmondoException) { null } catch (e: org.json.JSONException) { null }
+            } ?: break
+            out.add(r)
+        }
+        return out
+    }
+
+    /** Números de las jornadas ya cerradas. */
+    fun closedRounds(): Set<Int> {
+        val a = list(post(ROUNDS, q()))
+        return (0 until a.length()).map { a.getJSONObject(it) }
+            .filter { it.optString("status") == "closed" }.map { it.optInt("number") }.toSet()
+    }
+
+    /** Puntos reales de un jugador por jornada (número de jornada -> puntos). */
+    fun playerRoundPoints(playerId: String): Map<Int, Double> {
+        val pts = post(PLAYER_SUMMARY, q().put("playerId", playerId)).optJSONArray("points") ?: return emptyMap()
+        return (0 until pts.length()).map { pts.getJSONObject(it) }.associate { it.optInt("round") to it.optDouble("points", 0.0) }
+    }
 
     fun marketPlayers(): List<Player> = Parse.players(list(post(MARKET, q().put("type", "market"))))
 

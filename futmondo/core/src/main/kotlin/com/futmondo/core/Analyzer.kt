@@ -1,6 +1,7 @@
 package com.futmondo.core
 
-data class Scored(val player: Player, val expected: Double, val fixture: Fixture?)
+/** [expected] ya incluye la calibración; [raw] es la estimación del modelo sin calibrar. */
+data class Scored(val player: Player, val expected: Double, val fixture: Fixture?, val raw: Double = expected)
 
 data class LineupPlan(val formation: String, val starters: List<Scored>, val bench: List<Scored>) {
     val total get() = starters.sumOf { it.expected }
@@ -55,8 +56,29 @@ object Analyzer {
         return (base * statusFactor(p)).coerceAtLeast(0.0)
     }
 
-    fun score(players: List<Player>, fixtures: Map<String, Fixture>): List<Scored> =
-        players.map { val fx = fixtures.forPlayer(it); Scored(it, expected(it, fx), fx) }
+    /** Pesos de las próximas jornadas al valorar fichajes (la más cercana pesa más). */
+    val HORIZON_WEIGHTS = listOf(1.0, 0.6, 0.4)
+
+    fun score(players: List<Player>, fixtures: Map<String, Fixture>, cal: Calibration = Calibration.NONE): List<Scored> =
+        players.map {
+            val fx = fixtures.forPlayer(it)
+            val raw = expected(it, fx)
+            Scored(it, cal.adjust(it.role, raw), fx, raw)
+        }
+
+    /** Puntos esperados repartidos en varias jornadas (media ponderada). La primera es la que se muestra. */
+    fun scoreHorizon(
+        players: List<Player>,
+        rounds: List<Map<String, Fixture>>,
+        cal: Calibration = Calibration.NONE,
+    ): List<Scored> {
+        if (rounds.size <= 1) return score(players, rounds.firstOrNull() ?: emptyMap(), cal)
+        val w = HORIZON_WEIGHTS.take(rounds.size)
+        return players.map { p ->
+            val raw = rounds.indices.sumOf { w[it] * expected(p, rounds[it].forPlayer(p)) } / w.sum()
+            Scored(p, cal.adjust(p.role, raw), rounds[0].forPlayer(p), raw)
+        }
+    }
 
     /** Mejor once para cada formación posible, de mayor a menor suma esperada. */
     fun plans(scored: List<Scored>): List<LineupPlan> {

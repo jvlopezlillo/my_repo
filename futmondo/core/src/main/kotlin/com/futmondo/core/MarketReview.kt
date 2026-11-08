@@ -72,19 +72,20 @@ object MarketReview {
         market: List<Player>,
         roster: List<Player>,
         sellIds: Set<String>,
-        fixtures: Map<String, Fixture>,
+        rounds: List<Map<String, Fixture>>,
         info: TeamInfo,
+        cal: Calibration = Calibration.NONE,
         maxBuys: Int = DEFAULT_MAX_BUYS,
     ): List<BuyRec> {
         val keep = roster.filter { it.id !in sellIds }
         val ownIds = roster.map { it.id }.toSet()
-        val baseline = Analyzer.plans(Analyzer.score(keep, fixtures)).firstOrNull()?.total ?: 0.0
+        val baseline = Analyzer.plans(Analyzer.scoreHorizon(keep, rounds, cal)).firstOrNull()?.total ?: 0.0
         val maxBid = info.budget + info.teamValue / 2
         val recs = market.asSequence()
             .filter { it.id !in ownIds && !it.isUnavailable && !it.isDoubt }
             .filter { Analyzer.playProb(it) >= 0.6 }
             .mapNotNull { c ->
-                val total = Analyzer.plans(Analyzer.score(keep + c, fixtures)).firstOrNull()?.total ?: return@mapNotNull null
+                val total = Analyzer.plans(Analyzer.scoreHorizon(keep + c, rounds, cal)).firstOrNull()?.total ?: return@mapNotNull null
                 val gain = total - baseline
                 val need = if (c.role == Role.CENTROCAMPISTA) 1.5 else 0.7 // prioridad: portero, defensa, delantero top
                 if (gain < need) return@mapNotNull null
@@ -92,10 +93,11 @@ object MarketReview {
                 val reasons = ArrayList<String>()
                 reasons.add("mejora el once en +${fmt(gain)} pts esperados")
                 if (c.last5 > c.avg) reasons.add("en racha (últimos 5: ${fmt(c.last5)} > media ${fmt(c.avg)})")
-                val fx = fixtures.forPlayer(c)
-                if (fx != null) reasons.add((if (fx.isHome) "juega en casa" else "juega fuera") + " vs ${fx.opponent}")
+                val fxs = rounds.map { it.forPlayer(c) }
+                val cal3 = fxs.filterNotNull().joinToString(", ") { "${it.opponent} (${if (it.isHome) "c" else "f"})" }
+                if (cal3.isNotEmpty()) reasons.add("próximos rivales: $cal3")
                 if (c.isWarned) reasons.add("apercibido")
-                BuyRec(c, Analyzer.expected(c, fx), gain, bid, bid <= maxBid, reasons)
+                BuyRec(c, Analyzer.expected(c, fxs.firstOrNull()), gain, bid, bid <= maxBid, reasons)
             }
             .filter { it.fitsBudget }
             .sortedByDescending { it.gain }
