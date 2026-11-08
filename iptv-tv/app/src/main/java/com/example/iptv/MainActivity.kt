@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                 // Atrás: vuelve a Home desde cualquier pantalla secundaria.
                 BackHandler(enabled = vm.screen != Screen.HOME) {
                     when {
+                        vm.screen == Screen.PLAYER && vm.playerFullscreen -> vm.playerFullscreen = false // primero sale de pantalla completa
                         vm.screen == Screen.ADD && vm.active == null && vm.editing == null -> finish()
                         vm.screen == Screen.SYNC -> vm.screen = if (vm.playlists.isEmpty()) Screen.ADD else Screen.PLAYLISTS
                         else -> { vm.editing = null; vm.screen = Screen.HOME }

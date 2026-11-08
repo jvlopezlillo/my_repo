@@ -64,6 +64,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var selectedGroup by mutableStateOf(ALL)
     var playingIndex by mutableStateOf(0)
 
+    /** Pantalla completa del reproductor (móvil): fuerza horizontal y oculta las barras del sistema. */
+    var playerFullscreen by mutableStateOf(false)
+
     /** Último canal reproducido: al volver del reproductor el foco regresa a él. */
     var lastPlayedUrl by mutableStateOf<String?>(null)
         private set

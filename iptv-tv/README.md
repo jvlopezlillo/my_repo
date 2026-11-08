@@ -5,6 +5,7 @@ App de listas IPTV para Android TV y móvil/tablet (mismo APK) (Kotlin + Jetpack
 - Añade listas **M3U (URL)** o **Xtream Codes** (servidor + usuario + contraseña).
 - Descarga los canales y los agrupa según los grupos de la propia lista (`group-title` / categorías Xtream).
 - Buscador siempre visible arriba en el inicio; la búsqueda recorre todos los grupos.
+- Reproductor en móvil: botón **Pantalla completa** (fuerza horizontal y oculta las barras del sistema; también se activa al girar el móvil; «Atrás» sale primero de pantalla completa) y botón **Formato** que alterna Ajustar / Rellenar (recorta) / Estirar / 4:3 / 16:9 / 19,5:9 / 20:9 (se recuerda). El banner se oculta solo a los 5 s.
 - Zapping en reproducción: ↑/↓ (o CH+/CH−) cambia de canal; OK muestra/oculta el banner; Atrás vuelve a la lista.
 - Favoritos: toca el corazón de un canal para añadirlo/quitarlo; el primer grupo siempre es «★ Favoritos». En la tele, en reproducción, la tecla Menú o el botón rojo los alterna. Se guardan por lista.
 - Grupos: botón «Grupos» para ocultarlos (reversible) o borrarlos de la lista (persiste al actualizar; se puede restaurar). Por lista.
