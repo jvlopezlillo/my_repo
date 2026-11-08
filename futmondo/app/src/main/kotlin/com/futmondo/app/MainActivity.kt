@@ -14,6 +14,9 @@ import android.widget.TextView
 import com.futmondo.core.FutmondoApi
 import com.futmondo.core.FutmondoException
 import com.futmondo.core.FutmondoService
+import com.futmondo.core.History
+import com.futmondo.core.HistoryEntry
+import com.futmondo.core.HistoryKind
 import com.futmondo.core.MarketResult
 import com.futmondo.core.Reports
 import com.futmondo.core.SellCandidate
@@ -25,6 +28,7 @@ import com.futmondo.core.SellCandidate
  */
 class MainActivity : Activity() {
     private lateinit var store: SessionStore
+    private lateinit var historyPrefs: android.content.SharedPreferences
     private val api = FutmondoApi(AndroidHttp())
     private val service = FutmondoService(api)
 
@@ -42,6 +46,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = SessionStore(this)
+        historyPrefs = getSharedPreferences("history", MODE_PRIVATE)
         setContentView(buildUi())
         val s = store.load()
         if (s != null) {
@@ -95,6 +100,8 @@ class MainActivity : Activity() {
         mainBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mainBox.addView(button("Analizar") { runAnalyze() })
         mainBox.addView(button("Revisar mercado") { runMarket() })
+        mainBox.addView(button("Historial") { showHistory() })
+        mainBox.addView(button("Borrar historial") { saveHistory(emptyList()); clearSells(); result.text = "Historial borrado." })
         mainBox.addView(button("Cerrar sesión") {
             store.clear(); api.setSession(null); result.text = ""; clearSells(); showLogin()
         })
@@ -168,13 +175,17 @@ class MainActivity : Activity() {
 
     private fun runAnalyze() {
         clearSells()
-        background("Analizando…", { Reports.analysis(service.analyze()) }) { result.text = it }
+        background("Analizando…", { service.analyze() }) { a ->
+            result.text = Reports.analysis(a)
+            record(HistoryKind.ANALISIS, History.analysisSummary(a))
+        }
     }
 
     private fun runMarket() {
         clearSells()
         background("Revisando mercado…", { service.reviewMarket() }) { m ->
             result.text = Reports.market(m)
+            record(HistoryKind.MERCADO, History.marketSummary(m))
             showSellChoices(m)
         }
     }
@@ -218,7 +229,23 @@ class MainActivity : Activity() {
                 append("Puestos a la venta: $ok de ${chosen.size}.\n")
                 failures.forEach { append("✗ ${it.first.player.name}: ${it.second}\n") }
             }
+            record(HistoryKind.VENTA, History.saleSummary(chosen, failures))
             clearSells()
         }
+    }
+
+    private fun loadHistory() = History.fromJson(historyPrefs.getString("entries", null))
+
+    private fun saveHistory(l: List<HistoryEntry>) {
+        historyPrefs.edit().putString("entries", History.toJson(l)).apply()
+    }
+
+    private fun record(kind: HistoryKind, summary: String) {
+        saveHistory(History.add(loadHistory(), HistoryEntry(System.currentTimeMillis(), kind, summary)))
+    }
+
+    private fun showHistory() {
+        clearSells()
+        result.text = History.format(loadHistory())
     }
 }
