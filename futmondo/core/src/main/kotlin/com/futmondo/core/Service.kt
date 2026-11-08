@@ -31,6 +31,8 @@ data class MarketResult(
     /** Jornadas de calendario tenidas en cuenta para los fichajes. */
     val horizon: Int = 1,
     val warnings: List<String> = emptyList(),
+    /** Por qué no se pudo cubrir un hueco de suplentes con el mercado de hoy. */
+    val coverageNotes: List<String> = emptyList(),
 )
 
 /** Casos de uso de los dos botones. Solo leen datos; nada se ejecuta sin que el usuario lo confirme. */
@@ -77,8 +79,9 @@ class FutmondoService(private val api: FutmondoApi) {
         val sells = MarketReview.sellCandidates(roster, starters)
         val info = api.teamInfo()
         val sellIds = sells.filter { it.preselected }.map { it.player.id }.toSet()
+        val notes = ArrayList<String>()
         val buys = MarketReview.buyRecommendations(
-            api.marketPlayers(), roster, sellIds, rounds.map { it.byTeam }, info, cal, bids = bids,
+            api.marketPlayers(), roster, sellIds, rounds.map { it.byTeam }, info, cal, bids = bids, notes = notes,
         )
         // La cobertura se calcula tras las ventas marcadas, y se dice así para no confundirla con tu plantilla actual.
         val keepScored = Analyzer.score(roster.filter { it.id !in sellIds }, rounds.first().byTeam, cal)
@@ -91,7 +94,7 @@ class FutmondoService(private val api: FutmondoApi) {
                 c.copy(reasons = c.reasons + "ojo: al venderlo te quedas sin suplente en ${c.player.role.label.lowercase()}")
             else c
         }
-        return MarketResult(sellsChecked, buys, info, roster.size, roster.filter { it.onMarket }, rounds.size, warnings)
+        return MarketResult(sellsChecked, buys, info, roster.size, roster.filter { it.onMarket }, rounds.size, warnings, notes)
     }
 
     /**

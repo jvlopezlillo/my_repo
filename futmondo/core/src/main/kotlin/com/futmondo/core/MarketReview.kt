@@ -27,6 +27,8 @@ object MarketReview {
     const val DEFAULT_MAX_BUYS = 3
     private const val TREND = 0.015
     private const val COVERAGE_MAX_VALUE = 8_000_000L
+    private const val COVERAGE_MIN_PLAY = 0.4
+    private const val COVERAGE_MIN_EXPECTED = 3.5
 
     private fun pct(d: Double) = fmt(d * 100)
 
@@ -90,6 +92,8 @@ object MarketReview {
         cal: Calibration = Calibration.NONE,
         maxBuys: Int = DEFAULT_MAX_BUYS,
         bids: List<BidObs> = emptyList(),
+        /** Si se pasa, recibe una explicación por cada hueco de suplentes que no se pudo cubrir. */
+        notes: MutableList<String>? = null,
     ): List<BuyRec> {
         val keep = roster.filter { it.id !in sellIds }
         val ownIds = roster.map { it.id }.toSet()
@@ -130,18 +134,39 @@ object MarketReview {
             if (out.any { it.player.role == r.player.role } && r.gain < 2.0) continue
             out.add(r)
         }
-        // Cobertura: si queda hueco en la lista y hay una posición sin suplente, un jugador barato y sano.
-        if (out.size < maxBuys && basePlan != null) {
+        // Cobertura: posiciones sin suplente sano. Se busca uno barato que de verdad juegue y rinda algo.
+        if (basePlan != null) {
             val holes = Coverage.holes(keepScored, basePlan).filter { r -> out.none { it.player.role == r } }
             val order = listOf(Role.PORTERO, Role.DEFENSA, Role.DELANTERO, Role.CENTROCAMPISTA)
+            var covered = false
             for (r in order.filter { it in holes }) {
-                val pick = healthy.filter { it.role == r && it.value <= COVERAGE_MAX_VALUE }
-                    .maxByOrNull { Analyzer.expected(it, null) } ?: continue
-                val rec = build(pick, 0.0, "cubre un hueco: sin suplente en ${r.label.lowercase()}", true)
-                if (rec.fitsBudget) { out.add(rec); break }
+                val pool = market.filter { it.id !in ownIds && it.role == r }
+                val ok = pool.filter {
+                    !it.isUnavailable && !it.isDoubt && Analyzer.playProb(it) >= COVERAGE_MIN_PLAY &&
+                        it.value <= COVERAGE_MAX_VALUE && Analyzer.expected(it, null) >= COVERAGE_MIN_EXPECTED
+                }
+                val pick = ok.maxByOrNull { Analyzer.expected(it, null) }
+                val rec = if (pick != null && !covered && out.size < maxBuys) build(pick, 0.0, "cubre un hueco: sin suplente en ${r.label.lowercase()}", true) else null
+                if (rec != null && rec.fitsBudget) { out.add(rec); covered = true; continue }
+                if (notes != null) notes.add(noCoverageNote(r, pool))
             }
         }
         return out
+    }
+
+    /** Explica por qué el mercado de hoy no ofrece un suplente válido para esa posición. */
+    private fun noCoverageNote(r: Role, pool: List<Player>): String {
+        val name = r.label.lowercase()
+        if (pool.isEmpty()) return "Sin suplente en $name: hoy no hay ningún $name en el mercado."
+        val best = pool.maxByOrNull { Analyzer.expected(it, null) }!!
+        val why = when {
+            best.isUnavailable -> "está ${if (best.isInjured) "lesionado" else "sancionado"}"
+            best.isDoubt -> "está en duda"
+            Analyzer.playProb(best) < COVERAGE_MIN_PLAY -> "juega poco (puntuó en ${best.fitness.count { it != 0.0 }} de sus últimas ${best.fitness.size} jornadas)"
+            best.value > COVERAGE_MAX_VALUE -> "cuesta ${Reports.money(best.value)} (límite ${Reports.money(COVERAGE_MAX_VALUE)} para un suplente)"
+            else -> "rinde poco (${fmt(Analyzer.expected(best, null))} pts esperados; mínimo ${fmt(COVERAGE_MIN_EXPECTED)})"
+        }
+        return "Sin suplente en $name: del mercado (${pool.size} en $name) ninguno sirve; el mejor, ${best.name}, $why."
     }
 }
 

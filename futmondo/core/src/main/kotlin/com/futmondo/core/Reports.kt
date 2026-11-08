@@ -85,21 +85,40 @@ object Reports {
                 },
             ),
         )
+        fun buyLine(it: BuyRec): Line {
+            val basis = if (it.bidBasis > 0) "según ${it.bidBasis} compras de tu liga" else "estimación por defecto"
+            return Line(
+                (if (it.coverage) "SUPLENTE · " else "") +
+                    "${it.player.name} (${it.player.role.label}, ${it.player.team}) valor ${money(it.player.value)}; " +
+                    "puja orientativa ${money(it.suggestedBid)} ($basis): ${it.reasons.joinToString("; ")}",
+                if (it.coverage) Tone.WARN else Tone.GOOD,
+            )
+        }
+        val upgrades = m.buys.filter { !it.coverage }
+        val backups = m.buys.filter { it.coverage }
         out.add(
             Section(
-                "FICHAJES RECOMENDADOS (${m.buys.size}; calendario de ${m.horizon} jornada${if (m.horizon == 1) "" else "s"})",
-                if (m.buys.isEmpty()) listOf(Line("Ninguno del mercado actual mejora claramente tu once.", Tone.MUTED))
-                else m.buys.map {
-                    val basis = if (it.bidBasis > 0) "según ${it.bidBasis} compras de tu liga" else "estimación por defecto"
-                    Line(
-                        "${it.player.name} (${it.player.role.label}, ${it.player.team}) valor ${money(it.player.value)}; " +
-                            "puja orientativa ${money(it.suggestedBid)} ($basis): ${it.reasons.joinToString("; ")}",
-                        if (it.coverage) Tone.NORMAL else Tone.GOOD,
-                    )
-                },
+                "FICHAJES RECOMENDADOS (${upgrades.size}; calendario de ${m.horizon} jornada${if (m.horizon == 1) "" else "s"})",
+                if (upgrades.isEmpty()) listOf(Line("Ninguno del mercado actual mejora claramente tu once.", Tone.MUTED))
+                else upgrades.map(::buyLine),
             ),
         )
-        if (m.warnings.isNotEmpty()) out.add(Section("COBERTURA", m.warnings.map { Line(it, Tone.WARN) }))
+        if (backups.isNotEmpty()) {
+            out.add(
+                Section(
+                    "SUPLENTE RECOMENDADO (cubre un hueco; NO mejora tu once titular)",
+                    backups.map(::buyLine),
+                ),
+            )
+        }
+        if (m.warnings.isNotEmpty() || m.coverageNotes.isNotEmpty()) {
+            out.add(
+                Section(
+                    "COBERTURA",
+                    m.warnings.map { Line(it, Tone.WARN) } + m.coverageNotes.map { Line(it, Tone.MUTED) },
+                ),
+            )
+        }
         if (m.buys.isNotEmpty()) {
             val after = m.rosterSize - m.sells.count { it.preselected }
             out.add(

@@ -198,4 +198,37 @@ class MoreFeaturesTest {
         assertTrue(w.any { it.contains("te quedas sin once válido") && it.contains("defensa") })
         assertTrue(w.none { Regex("pierdes (\\d{2,})").containsMatchIn(it) }) // nada de "pierdes 79 pts"
     }
+
+    private fun rosterOneGk(): List<Player> {
+        val list = arrayListOf(pj("Unico", "portero", 6.0, 6.0))
+        for (i in 1..5) list.add(pj("D$i", "defensa", 5.0, 5.0))
+        for (i in 1..5) list.add(pj("M$i", "centrocampista", 5.0, 5.0))
+        for (i in 1..4) list.add(pj("F$i", "delantero", 5.0, 5.0))
+        return players(*list.toTypedArray())
+    }
+
+    @Test fun explainsWhyNoBackupWhenMarketOnlyHasPlayersWhoRarelyPlay() {
+        // Caso real: porteros baratos que casi no juegan no sirven de suplente.
+        val market = players(pj("Banquillo", "portero", 4.0, 0.5, fit = listOf(0.0, 0.0, 0.0, 2.0, 0.0), value = 1_000_000))
+        val notes = ArrayList<String>()
+        val recs = MarketReview.buyRecommendations(market, rosterOneGk(), emptySet(), listOf(emptyMap()),
+            TeamInfo(5_000_000, 100_000_000, 18, 10), notes = notes)
+        assertTrue(recs.none { it.coverage })
+        assertTrue(notes.single().contains("Sin suplente en portero") && notes.single().contains("juega poco") && notes.single().contains("Banquillo"))
+        val none = ArrayList<String>()
+        MarketReview.buyRecommendations(emptyList(), rosterOneGk(), emptySet(), listOf(emptyMap()), TeamInfo(5_000_000, 100_000_000, 18, 10), notes = none)
+        assertTrue(none.single().contains("no hay ningún portero en el mercado"))
+    }
+
+    @Test fun backupIsClearlyLabelledInTheReport() {
+        val market = players(pj("Suplente", "portero", 4.0, 4.0, value = 2_000_000))
+        val info = TeamInfo(5_000_000, 100_000_000, 18, 10)
+        val roster = rosterOneGk()
+        val buys = MarketReview.buyRecommendations(market, roster, emptySet(), listOf(emptyMap()), info)
+        val m = MarketResult(emptyList(), buys, info, roster.size, emptyList())
+        val txt = Reports.market(m)
+        assertTrue(txt.contains("SUPLENTE RECOMENDADO (cubre un hueco; NO mejora tu once titular)"))
+        assertTrue(txt.contains("SUPLENTE · Suplente"))
+        assertTrue(txt.contains("FICHAJES RECOMENDADOS (0;")) // no se cuenta como mejora del once
+    }
 }
