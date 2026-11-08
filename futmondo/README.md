@@ -28,6 +28,9 @@ App Android con dos botones para la liga "Hombres libres x":
 - `app/`: interfaz Android (vistas nativas, sin dependencias externas).
 - `.github/workflows/futmondo-android.yml`: compila el APK de depuración en GitHub Actions (artefacto `futmondo-debug-apk`).
 
+## Actualizar sin desinstalar
+Con una clave de firma fija cada APK nuevo se instala **encima** del anterior y conserva tus datos (el `versionCode` sube solo con cada ejecución de GitHub Actions). La clave **no está en el repositorio**: se guarda como secretos de GitHub (`FUTMONDO_KEYSTORE_B64`, `FUTMONDO_KEYSTORE_PASSWORD`, `FUTMONDO_KEY_ALIAS`, `FUTMONDO_KEY_PASSWORD`). Si faltan, el APK se compila igualmente pero con firma aleatoria y no se puede instalar sobre el anterior. Guarda una copia de la clave: si se pierde, hay que desinstalar para actualizar.
+
 ## Estado
 Probado: lógica del núcleo con datos sintéticos. **No probado**: compilación del módulo `app` y llamadas reales a `api.futmondo.com` (el entorno de desarrollo no tenía Android SDK ni acceso a esa API).
 Supuestos por verificar con datos reales: significado exacto de `status` (`injured`, `injured2`, `redcard`, `doubt`, `yellowcard`), que `fitness` son los puntos de las últimas 5 jornadas (0 = no jugó), y que el precio de venta = valor del jugador.

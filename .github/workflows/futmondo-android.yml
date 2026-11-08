@@ -17,10 +17,27 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Restaurar clave de firma (si existen los secretos)
+        env:
+          KS_B64: ${{ secrets.FUTMONDO_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/futmondo.jks"
+            echo "FUTMONDO_KEYSTORE=$RUNNER_TEMP/futmondo.jks" >> "$GITHUB_ENV"
+            echo "Clave de firma restaurada desde los secretos."
+          else
+            echo "::warning::Sin secretos de firma: el APK se firmará con una clave aleatoria y no podrá instalarse encima del anterior."
+          fi
       - name: Pruebas de la lógica
         run: ./gradlew :core:test
       - name: APK de depuración
+        env:
+          FUTMONDO_KEYSTORE_PASSWORD: ${{ secrets.FUTMONDO_KEYSTORE_PASSWORD }}
+          FUTMONDO_KEY_ALIAS: ${{ secrets.FUTMONDO_KEY_ALIAS }}
+          FUTMONDO_KEY_PASSWORD: ${{ secrets.FUTMONDO_KEY_PASSWORD }}
         run: ./gradlew :app:assembleDebug
+      - name: Huella de la firma (debe ser idéntica entre ejecuciones)
+        run: keytool -printcert -jarfile app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA256\|SHA-256"
       - uses: actions/upload-artifact@v4
         with:
           name: futmondo-debug-apk
