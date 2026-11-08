@@ -80,9 +80,18 @@ class FutmondoService(private val api: FutmondoApi) {
         val buys = MarketReview.buyRecommendations(
             api.marketPlayers(), roster, sellIds, rounds.map { it.byTeam }, info, cal, bids = bids,
         )
+        // La cobertura se calcula tras las ventas marcadas, y se dice así para no confundirla con tu plantilla actual.
         val keepScored = Analyzer.score(roster.filter { it.id !in sellIds }, rounds.first().byTeam, cal)
-        val warnings = Analyzer.plans(keepScored).firstOrNull()?.let { Coverage.warnings(keepScored, it) }.orEmpty()
-        return MarketResult(sells, buys, info, roster.size, roster.filter { it.onMarket }, rounds.size, warnings)
+        val keepPlan = Analyzer.plans(keepScored).firstOrNull()
+        val raw = keepPlan?.let { Coverage.warnings(keepScored, it) }.orEmpty()
+        val warnings = if (sellIds.isEmpty()) raw else raw.map { "Tras vender los marcados: ${it.replaceFirstChar { c -> c.lowercase() }}" }
+        val holes = keepPlan?.let { Coverage.holes(keepScored, it) }.orEmpty()
+        val sellsChecked = sells.map { c ->
+            if (c.preselected && c.player.role in holes)
+                c.copy(reasons = c.reasons + "ojo: al venderlo te quedas sin suplente en ${c.player.role.label.lowercase()}")
+            else c
+        }
+        return MarketResult(sellsChecked, buys, info, roster.size, roster.filter { it.onMarket }, rounds.size, warnings)
     }
 
     /**

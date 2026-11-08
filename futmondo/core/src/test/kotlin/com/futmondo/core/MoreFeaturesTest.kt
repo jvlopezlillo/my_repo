@@ -114,7 +114,7 @@ class MoreFeaturesTest {
         val plan = Analyzer.plans(scored).first()
         val w = Coverage.warnings(scored, plan)
         assertTrue(w.any { it.contains("Solo tienes 1 portero") })
-        assertTrue(w.any { it.contains("Si falla Unico") })
+        assertTrue(w.any { it.contains("Si falla un portero te quedas sin once válido") })
     }
 
     @Test fun cheapBackupGoalkeeperIsRecommendedToCoverTheHole() {
@@ -185,5 +185,17 @@ class MoreFeaturesTest {
         val txt = Reports.analysis(a)
         assertTrue(txt.contains("el recomendado gana"))
         assertTrue(Sections.toText(Reports.analysisSections(a)).contains("ONCE RECOMENDADO"))
+    }
+
+    @Test fun noValidElevenIsExplainedInsteadOfShowingAbsurdPointLoss() {
+        val list = arrayListOf(pj("G1", "portero"), pj("G2", "portero"))
+        for (i in 1..3) list.add(pj("D$i", "defensa")) // solo 3: si cae uno no hay formación posible
+        for (i in 1..5) list.add(pj("M$i", "centrocampista"))
+        for (i in 1..4) list.add(pj("F$i", "delantero"))
+        val scored = Analyzer.score(players(*list.toTypedArray()), emptyMap())
+        val plan = Analyzer.plans(scored).first()
+        val w = Coverage.warnings(scored, plan)
+        assertTrue(w.any { it.contains("te quedas sin once válido") && it.contains("defensa") })
+        assertTrue(w.none { Regex("pierdes (\\d{2,})").containsMatchIn(it) }) // nada de "pierdes 79 pts"
     }
 }
