@@ -33,7 +33,18 @@ data class Player(
     val onMarket: Boolean,
     /** Precio pedido en el mercado (solo jugadores del mercado de fichajes). */
     val askPrice: Long,
+    /** Último cambio de valor de mercado (€), tal como lo da la API. */
+    val change: Long = 0,
 ) {
+    /** Jornadas seguidas, hasta la última, sin puntuar (0 = no jugó). */
+    val trailingZeros: Int get() = fitness.takeLastWhile { it == 0.0 }.size
+
+    /** Cambio de valor relativo (p. ej. 0,02 = +2 %). */
+    val trendPct: Double get() = if (value > 0) change.toDouble() / value else 0.0
+
+    /** Baja probablemente larga: no disponible y lleva ≥3 de sus últimas jornadas sin puntuar (estimación). */
+    val probableLongAbsence: Boolean get() = isUnavailable && fitness.size >= 5 && trailingZeros >= 3
+
     val isInjured get() = status == "injured" || status == "injured2"
     val isSuspended get() = status == "redcard"
     val isDoubt get() = status == "doubt"
@@ -54,7 +65,13 @@ data class TeamInfo(val budget: Long, val teamValue: Long, val maxPlayers: Int, 
 data class Lineup(val strategy: String, val starterIds: List<String>, val benchIds: List<String>)
 
 /** Partidos de una jornada, indexados por equipo. */
-data class RoundFixtures(val number: Int, val id: String, val byTeam: Map<String, Fixture>)
+data class RoundFixtures(
+    val number: Int,
+    val id: String,
+    val byTeam: Map<String, Fixture>,
+    /** Hora (ms) del primer partido de la jornada: a partir de ahí se bloquea la alineación. */
+    val firstMatchMillis: Long? = null,
+)
 
 /** Cómo juega un equipo en una jornada. */
 data class Fixture(val isHome: Boolean, val opponent: String, val winProb: Double?)
@@ -81,6 +98,7 @@ object Parse {
             fitness = fit,
             onMarket = o.optBoolean("market", false),
             askPrice = o.optLong("price", 0),
+            change = o.optLong("change", 0),
         )
     }
 
@@ -126,7 +144,11 @@ object Parse {
 
     fun round(answer: JSONObject): RoundFixtures {
         val r = answer.optJSONObject("round")
-        return RoundFixtures(r?.optInt("number", 0) ?: 0, r?.optString("_id").orEmpty(), fixtures(answer))
+        val ms = answer.optJSONArray("matches")
+        val first = (0 until (ms?.length() ?: 0)).mapNotNull {
+            try { java.time.Instant.parse(ms!!.getJSONObject(it).optString("date")).toEpochMilli() } catch (e: Exception) { null }
+        }.minOrNull()
+        return RoundFixtures(r?.optInt("number", 0) ?: 0, r?.optString("_id").orEmpty(), fixtures(answer), first)
     }
 
     /** Devuelve un mapa clave-de-equipo -> Fixture (claves: id y nombre/slug normalizados). */

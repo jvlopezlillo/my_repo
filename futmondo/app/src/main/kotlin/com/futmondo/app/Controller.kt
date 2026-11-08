@@ -2,6 +2,8 @@ package com.futmondo.app
 
 import android.content.Context
 import com.futmondo.core.Analysis
+import com.futmondo.core.Backup
+import com.futmondo.core.Scored
 import com.futmondo.core.FutmondoApi
 import com.futmondo.core.FutmondoService
 import com.futmondo.core.History
@@ -11,7 +13,7 @@ import com.futmondo.core.Predictions
 import com.futmondo.core.SellCandidate
 
 /** Une servicio, historial y predicciones. Lo usan tanto la pantalla como la revisión diaria. */
-class Controller(context: Context, val api: FutmondoApi) {
+class Controller(private val context: Context, val api: FutmondoApi) {
     val data = LocalData(context)
     private val service = FutmondoService(api)
 
@@ -31,12 +33,16 @@ class Controller(context: Context, val api: FutmondoApi) {
         val a = service.analyze(data.calibration())
         a.prediction?.let { data.savePredictions(Predictions.upsert(data.predictions(), it)) }
         data.addHistory(kind, prefix + History.analysisSummary(a))
+        // Aviso previo al cierre de la alineación (solo si la revisión diaria está activada).
+        if (data.dailyEnabled) a.firstMatchMillis?.let { LockAlert.schedule(context, it) }
         return a
     }
 
     fun reviewMarket(record: Boolean = true): MarketResult {
         resolvePast()
-        val m = service.reviewMarket(data.calibration())
+        // Aprende las pujas de la liga; si falla (p. ej. el tablón cambió) se usan los porcentajes por defecto.
+        try { data.saveBids(service.refreshBids(data.bids())) } catch (e: Exception) { /* sin datos nuevos */ }
+        val m = service.reviewMarket(data.calibration(), data.bids())
         if (record) data.addHistory(HistoryKind.MERCADO, History.marketSummary(m))
         return m
     }
@@ -50,5 +56,16 @@ class Controller(context: Context, val api: FutmondoApi) {
     fun precisionReport(): String {
         resolvePast()
         return Predictions.report(data.predictions())
+    }
+
+    fun comparisonPool(): List<Scored> = service.comparisonPool(data.calibration())
+
+    fun exportBackup(): String = Backup.export(data.backupData())
+
+    /** Fusiona una copia con los datos actuales. Devuelve false si el archivo no es una copia válida. */
+    fun importBackup(text: String): Boolean {
+        val imp = Backup.parse(text) ?: return false
+        data.restore(Backup.merge(data.backupData(), imp))
+        return true
     }
 }

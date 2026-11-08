@@ -3,6 +3,10 @@ package com.futmondo.app
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.TimePickerDialog
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -15,7 +19,11 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.futmondo.core.FutmondoApi
 import com.futmondo.core.FutmondoException
+import com.futmondo.core.Compare
 import com.futmondo.core.History
+import com.futmondo.core.Line
+import com.futmondo.core.Section
+import com.futmondo.core.Tone
 import com.futmondo.core.Reports
 import com.futmondo.core.SellCandidate
 
@@ -34,7 +42,7 @@ class MainActivity : Activity() {
     private lateinit var email: EditText
     private lateinit var password: EditText
     private lateinit var status: TextView
-    private lateinit var result: TextView
+    private lateinit var resultBox: LinearLayout
     private lateinit var sellBox: LinearLayout
     private lateinit var sellButton: Button
     private lateinit var dailyCheck: CheckBox
@@ -100,11 +108,13 @@ class MainActivity : Activity() {
         mainBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mainBox.addView(button("Analizar") { runAnalyze() })
         mainBox.addView(button("Revisar mercado") { runMarket() })
-        mainBox.addView(button("Historial") { clearSells(); result.text = History.format(controller.data.history()) })
+        mainBox.addView(button("Comparar jugadores") { runCompare() })
+        mainBox.addView(button("Historial") { clearSells(); showText(History.format(controller.data.history())) })
         mainBox.addView(button("Precisión del modelo") { runPrecision() })
 
+        mainBox.addView(text("Avisos automáticos (solo avisan, no cambian nada):", 13f))
         dailyCheck = CheckBox(this).apply {
-            text = "Revisión diaria automática (solo avisa, no cambia nada)"
+            text = "Revisión diaria y aviso antes del cierre de alineación"
             isChecked = controller.data.dailyEnabled
             setOnCheckedChangeListener { _, on -> setDaily(on) }
         }
@@ -113,11 +123,14 @@ class MainActivity : Activity() {
         updateHourLabel()
         mainBox.addView(dailyHourButton)
 
+        mainBox.addView(text("Datos:", 13f))
+        mainBox.addView(button("Exportar copia de seguridad") { exportBackup() })
+        mainBox.addView(button("Importar copia de seguridad") { importBackup() })
         mainBox.addView(button("Borrar historial") {
-            controller.data.clearHistory(); clearSells(); result.text = "Historial borrado."
+            controller.data.clearHistory(); clearSells(); showText("Historial borrado.")
         })
         mainBox.addView(button("Cerrar sesión") {
-            store.clear(); api.setSession(null); result.text = ""; clearSells()
+            store.clear(); api.setSession(null); resultBox.removeAllViews(); clearSells()
             controller.data.dailyEnabled = false
             dailyCheck.isChecked = false
             DailyReview.cancel(this)
@@ -127,8 +140,8 @@ class MainActivity : Activity() {
 
         status = text("")
         root.addView(status)
-        result = text("").apply { setTextIsSelectable(true) }
-        root.addView(result)
+        resultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(resultBox)
 
         sellBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(sellBox)
@@ -198,15 +211,53 @@ class MainActivity : Activity() {
     }
 
     private fun showError(e: Throwable) {
-        val msg = when {
-            e is FutmondoException && e.isAuth -> "La sesión ha caducado. Cierra sesión y vuelve a entrar."
-            e is FutmondoException -> "Futmondo devolvió un error: ${e.code}"
-            e is java.io.IOException -> "No se pudo conectar con Futmondo. Revisa tu conexión."
+        val msg = when (e) {
+            is FutmondoException -> e.userMessage
+            is java.io.IOException -> "No se pudo conectar con Futmondo. Revisa tu conexión."
             else -> "Error inesperado (¿ha cambiado la API?): ${e.message}"
         }
-        result.text = msg
+        showSections(listOf(Section("", listOf(Line(msg, Tone.BAD)))))
         clearSells()
     }
+
+    private val toneColors = mapOf(
+        Tone.NORMAL to Color.parseColor("#1B2A41"), Tone.GOOD to Color.parseColor("#2E7D32"),
+        Tone.WARN to Color.parseColor("#B45309"), Tone.BAD to Color.parseColor("#C62828"),
+        Tone.MUTED to Color.parseColor("#6B7280"),
+    )
+
+    private fun card(sec: Section): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = GradientDrawable().apply { setColor(Color.parseColor("#F2F4F7")); cornerRadius = dp(10).toFloat() }
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { setMargins(0, dp(6), 0, dp(6)) }
+        if (sec.title.isNotEmpty()) {
+            addView(TextView(context).apply {
+                text = sec.title
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(toneColors.getValue(Tone.NORMAL))
+                setTextIsSelectable(true)
+            })
+        }
+        sec.lines.forEach { l ->
+            addView(TextView(context).apply {
+                text = l.text
+                textSize = 14f
+                setTextColor(toneColors.getValue(l.tone))
+                setPadding(0, dp(3), 0, dp(3))
+                setTextIsSelectable(true)
+            })
+        }
+    }
+
+    private fun showSections(sections: List<Section>) {
+        resultBox.removeAllViews()
+        sections.filter { it.title.isNotEmpty() || it.lines.isNotEmpty() }.forEach { resultBox.addView(card(it)) }
+    }
+
+    private fun showText(t: String) = showSections(listOf(Section("", t.split("\n\n").map { Line(it) })))
 
     private fun doLogin() {
         val mail = email.text.toString().trim()
@@ -221,13 +272,13 @@ class MainActivity : Activity() {
 
     private fun runAnalyze() {
         clearSells()
-        background("Analizando…", { controller.analyze() }) { result.text = Reports.analysis(it) }
+        background("Analizando…", { controller.analyze() }) { showSections(Reports.analysisSections(it)) }
     }
 
     private fun runMarket() {
         clearSells()
         background("Revisando mercado…", { controller.reviewMarket() }) { m ->
-            result.text = Reports.market(m)
+            showSections(Reports.marketSections(m))
             if (m.sells.isEmpty()) return@background
             sellBox.addView(text("Elige qué poner a la venta (nada se vende hasta que confirmes):"))
             for (c in m.sells) {
@@ -244,7 +295,58 @@ class MainActivity : Activity() {
 
     private fun runPrecision() {
         clearSells()
-        background("Calculando precisión…", { controller.precisionReport() }) { result.text = it }
+        background("Calculando precisión…", { controller.precisionReport() }) { showText(it) }
+    }
+
+    private fun runCompare() {
+        clearSells()
+        background("Cargando jugadores…", { controller.comparisonPool() }) { pool ->
+            val sorted = pool.sortedWith(compareBy({ it.player.role.ordinal }, { it.player.name }))
+            val labels = sorted.map { "${it.player.name} (${it.player.role.label}, ${it.player.team})" }.toTypedArray()
+            AlertDialog.Builder(this).setTitle("Primer jugador").setItems(labels) { _, i ->
+                AlertDialog.Builder(this).setTitle("Segundo jugador").setItems(labels) { _, j ->
+                    if (i == j) status.text = "Elige dos jugadores distintos."
+                    else showSections(Compare.sections(sorted[i], sorted[j]))
+                }.show()
+            }.show()
+        }
+    }
+
+    private fun exportBackup() {
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "futmondo-copia.json")
+        }
+        startActivityForResult(i, REQ_EXPORT)
+    }
+
+    private fun importBackup() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        startActivityForResult(i, REQ_IMPORT)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) return
+        when (requestCode) {
+            REQ_EXPORT -> background("Guardando copia…", {
+                contentResolver.openOutputStream(uri, "wt")!!.use { it.write(controller.exportBackup().toByteArray(Charsets.UTF_8)) }
+            }) { showText("Copia guardada. No contiene token ni contraseña.") }
+            REQ_IMPORT -> background("Importando copia…", {
+                controller.importBackup(contentResolver.openInputStream(uri)!!.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            }) { ok -> showText(if (ok) "Copia importada y fusionada con tus datos." else "El archivo no es una copia válida de esta app.") }
+        }
+    }
+
+    private companion object {
+        const val REQ_EXPORT = 101
+        const val REQ_IMPORT = 102
     }
 
     private fun clearSells() {
@@ -268,10 +370,8 @@ class MainActivity : Activity() {
     private fun doSell(chosen: List<SellCandidate>) {
         background("Poniendo a la venta…", { controller.putOnSale(chosen) }) { failures ->
             val ok = chosen.size - failures.size
-            result.text = buildString {
-                append("Puestos a la venta: $ok de ${chosen.size}.\n")
-                failures.forEach { append("✗ ${it.first.player.name}: ${it.second}\n") }
-            }
+            showSections(listOf(Section("", listOf(Line("Puestos a la venta: $ok de ${chosen.size}.", if (failures.isEmpty()) Tone.GOOD else Tone.WARN)) +
+                failures.map { Line("✗ ${it.first.player.name}: ${it.second}", Tone.BAD) })))
             clearSells()
         }
     }

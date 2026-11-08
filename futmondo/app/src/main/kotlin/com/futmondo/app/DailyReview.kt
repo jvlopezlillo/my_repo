@@ -46,9 +46,19 @@ object DailyReview {
 
     fun cancel(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(WORK)
+        LockAlert.cancel(context)
     }
 
-    fun notify(context: Context, title: String, text: String) {
+    /** Avisa de sesión caducada o de cambio en la API (una sola vez hasta que vuelva a funcionar). */
+    fun handleFailure(context: Context, data: LocalData, e: FutmondoException) {
+        when {
+            e.isAuth -> notify(context, "Futmondo: sesión caducada", e.userMessage, id = 3)
+            e is com.futmondo.core.ApiChangedException ->
+                if (!data.apiChangedNotified) { data.apiChangedNotified = true; notify(context, "Futmondo: la API ha cambiado", e.userMessage, id = 4) }
+        }
+    }
+
+    fun notify(context: Context, title: String, text: String, id: Int = 1) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Revisión diaria", NotificationManager.IMPORTANCE_DEFAULT))
         val open = PendingIntent.getActivity(
@@ -63,7 +73,7 @@ object DailyReview {
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()
-        try { nm.notify(1, n) } catch (e: SecurityException) { /* sin permiso de notificaciones */ }
+        try { nm.notify(id, n) } catch (e: SecurityException) { /* sin permiso de notificaciones */ }
     }
 }
 
@@ -85,12 +95,14 @@ class DailyWorker(context: Context, params: WorkerParameters) : Worker(context, 
                 append(".\n")
                 append("Posibles ventas: ${sells.joinToString().ifEmpty { "ninguna" }}.\n")
                 append("Fichajes a vigilar: ${buys.joinToString().ifEmpty { "ninguno" }}.\n")
+                (a.warnings + m.warnings).distinct().firstOrNull()?.let { append("Ojo: $it\n") }
                 append("Abre la app para decidir; no se ha hecho ningún cambio.")
             }
             DailyReview.notify(ctx, "Revisión diaria de Futmondo", text)
+            c.data.apiChangedNotified = false
             Result.success()
         } catch (e: FutmondoException) {
-            if (e.isAuth) DailyReview.notify(ctx, "Futmondo: sesión caducada", "Abre la app y vuelve a entrar para seguir con la revisión diaria.")
+            DailyReview.handleFailure(ctx, c.data, e)
             Result.success()
         } catch (e: IOException) {
             Result.retry()
