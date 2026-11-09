@@ -43,9 +43,12 @@ class FutmondoService(private val api: FutmondoApi) {
         private const val MAX_ROUNDS_TO_RESOLVE = 3
     }
 
-    fun analyze(cal: Calibration = Calibration.NONE): Analysis {
-        val roster = api.roster()
-        val next = api.upcomingRounds(1).first()
+    fun analyze(
+        cal: Calibration = Calibration.NONE,
+        roster: List<Player> = api.roster(),
+        next: RoundFixtures = api.upcomingRounds(1).first(),
+        info: TeamInfo? = null,
+    ): Analysis {
         val plans = Analyzer.plans(Analyzer.score(roster, next.byTeam, cal))
         require(plans.isNotEmpty()) { "Plantilla insuficiente para formar un once" }
         // La predicción guarda la estimación SIN calibrar, para no realimentar la corrección.
@@ -58,7 +61,7 @@ class FutmondoService(private val api: FutmondoApi) {
         val cur = scored.filter { it.player.id in lineup.starterIds }
         val currentTotal = if (lineup.starterIds.isNotEmpty() && cur.size == lineup.starterIds.size) cur.sumOf { it.expected } else null
         return Analysis(
-            lineup, plans, api.teamInfo(), roster, next.number, prediction,
+            lineup, plans, info ?: api.teamInfo(), roster, next.number, prediction,
             Coverage.warnings(scored, plans.first()), currentTotal, next.firstMatchMillis,
         )
     }
@@ -71,13 +74,24 @@ class FutmondoService(private val api: FutmondoApi) {
         return BidModel.merge(existing, BidModel.observations(fresh, api.leagueValues()))
     }
 
-    fun reviewMarket(cal: Calibration = Calibration.NONE, bids: List<BidObs> = emptyList()): MarketResult {
+    /** Revisión diaria: análisis + mercado compartiendo los mismos datos (cada dato se pide una sola vez). */
+    fun dailyReview(cal: Calibration = Calibration.NONE, bids: List<BidObs> = emptyList()): Pair<Analysis, MarketResult> {
         val roster = api.roster()
         val rounds = api.upcomingRounds(HORIZON)
+        val info = api.teamInfo()
+        return analyze(cal, roster, rounds.first(), info) to reviewMarket(cal, bids, roster, rounds, info)
+    }
+
+    fun reviewMarket(
+        cal: Calibration = Calibration.NONE,
+        bids: List<BidObs> = emptyList(),
+        roster: List<Player> = api.roster(),
+        rounds: List<RoundFixtures> = api.upcomingRounds(HORIZON),
+        info: TeamInfo = api.teamInfo(),
+    ): MarketResult {
         val plans = Analyzer.plans(Analyzer.score(roster, rounds.first().byTeam, cal))
         val starters = plans.firstOrNull()?.starters?.map { it.player.id }?.toSet().orEmpty()
         val sells = MarketReview.sellCandidates(roster, starters)
-        val info = api.teamInfo()
         val sellIds = sells.filter { it.preselected }.map { it.player.id }.toSet()
         val notes = ArrayList<String>()
         val buys = MarketReview.buyRecommendations(

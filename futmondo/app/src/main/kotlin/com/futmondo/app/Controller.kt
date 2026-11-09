@@ -28,13 +28,13 @@ class Controller(private val context: Context, val api: FutmondoApi) {
         }
     }
 
-    fun analyze(kind: HistoryKind = HistoryKind.ANALISIS, prefix: String = ""): Analysis {
+    fun analyze(kind: HistoryKind = HistoryKind.ANALISIS, prefix: String = "", scheduleAlert: Boolean = true): Analysis {
         resolvePast()
         val a = service.analyze(data.calibration())
         a.prediction?.let { data.savePredictions(Predictions.upsert(data.predictions(), it)) }
         data.addHistory(kind, prefix + History.analysisSummary(a))
         // Aviso previo al cierre de la alineación (solo si la revisión diaria está activada).
-        if (data.dailyEnabled) a.firstMatchMillis?.let { LockAlert.schedule(context, it) }
+        if (scheduleAlert && data.dailyEnabled) a.firstMatchMillis?.let { LockAlert.schedule(context, it) }
         return a
     }
 
@@ -67,5 +67,18 @@ class Controller(private val context: Context, val api: FutmondoApi) {
         val imp = Backup.parse(text) ?: return false
         data.restore(Backup.merge(data.backupData(), imp))
         return true
+    }
+
+    /**
+     * Revisión diaria: una sola pasada (cada dato se pide una vez). NO escribe en el historial:
+     * lo hace quien la llama, una única vez y solo si termina bien.
+     */
+    fun dailyReview(): Pair<Analysis, MarketResult> {
+        resolvePast()
+        try { data.saveBids(service.refreshBids(data.bids())) } catch (e: Exception) { /* sin datos nuevos */ }
+        val (a, m) = service.dailyReview(data.calibration(), data.bids())
+        a.prediction?.let { data.savePredictions(Predictions.upsert(data.predictions(), it)) }
+        a.firstMatchMillis?.let { LockAlert.schedule(context, it) }
+        return a to m
     }
 }

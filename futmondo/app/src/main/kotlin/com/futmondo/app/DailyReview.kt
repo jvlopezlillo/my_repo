@@ -78,17 +78,28 @@ object DailyReview {
 }
 
 class DailyWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+    companion object {
+        /** No repetir la revisión si ya terminó una hace menos de esto. */
+        const val MIN_GAP_MS = 6L * 60 * 60 * 1000
+        const val MAX_ATTEMPTS = 2
+    }
+
     override fun doWork(): Result {
         val ctx = applicationContext
         val session = SessionStore(ctx).load() ?: return Result.success() // sin sesión: nada que hacer
         val api = FutmondoApi(AndroidHttp(), session)
         val c = Controller(ctx, api)
+        if (!c.data.dailyEnabled) return Result.success()
+        if (System.currentTimeMillis() - c.data.lastDailyDone < MIN_GAP_MS) return Result.success() // ya hecha hoy
         return try {
-            val a = c.analyze(HistoryKind.AUTOMATICA, "(automática) ")
-            val m = c.reviewMarket(record = false)
+            val (a, m) = c.dailyReview()
             val sells = m.sells.filter { it.preselected }.map { it.player.name }
             val buys = m.buys.map { it.player.name }
-            c.data.addHistory(HistoryKind.AUTOMATICA, "(automática) " + History.marketSummary(m))
+            // Una sola entrada de historial por revisión, y solo si terminó bien.
+            c.data.addHistory(
+                HistoryKind.AUTOMATICA,
+                "(automática) " + History.analysisSummary(a) + " " + History.marketSummary(m) + " [${api.requestCount} peticiones]",
+            )
             val text = buildString {
                 append("Jornada ${a.round}: mejor formación ${a.best.formation}")
                 if (a.current.strategy != a.best.formation) append(" (tienes ${a.current.strategy})")
@@ -100,12 +111,14 @@ class DailyWorker(context: Context, params: WorkerParameters) : Worker(context, 
             }
             DailyReview.notify(ctx, "Revisión diaria de Futmondo", text)
             c.data.apiChangedNotified = false
+            c.data.lastDailyDone = System.currentTimeMillis()
             Result.success()
         } catch (e: FutmondoException) {
             DailyReview.handleFailure(ctx, c.data, e)
+            c.data.lastDailyDone = System.currentTimeMillis() // no insistir hoy si la API falla
             Result.success()
         } catch (e: IOException) {
-            Result.retry()
+            if (runAttemptCount + 1 >= MAX_ATTEMPTS) Result.success() else Result.retry()
         } catch (e: Exception) {
             Result.success() // p. ej. la API cambió: no reintentar en bucle
         }

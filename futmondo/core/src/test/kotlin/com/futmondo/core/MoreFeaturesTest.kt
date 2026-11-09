@@ -231,4 +231,36 @@ class MoreFeaturesTest {
         assertTrue(txt.contains("SUPLENTE · Suplente"))
         assertTrue(txt.contains("FICHAJES RECOMENDADOS (0;")) // no se cuenta como mejora del once
     }
+
+    @Test fun dailyReviewAsksEachDatumOnlyOnce() {
+        val roster = JSONArray()
+        val ids = ArrayList<String>()
+        fun add(name: String, role: String) { val o = pj(name, role, 5.0, 5.0); ids.add(o.getString("id")); roster.put(o) }
+        add("G1", "portero"); add("G2", "portero")
+        for (i in 1..5) add("D$i", "defensa"); for (i in 1..5) add("M$i", "centrocampista"); for (i in 1..3) add("F$i", "delantero")
+        val calls = HashMap<String, Int>()
+        val api = FutmondoApi({ path, body ->
+            calls.merge(path, 1, Int::plus)
+            when (path) {
+                FutmondoApi.ROSTER -> """{"answer":$roster}"""
+                FutmondoApi.MATCHES -> {
+                    val rid = JSONObject(body).getJSONObject("query").get("roundId")
+                    val num = if (rid == JSONObject.NULL) 13 else 14 // solo la siguiente existe; las demás no
+                    if (rid != JSONObject.NULL && !(rid as String).startsWith("6a4af7f1ae633549bd0f040e".substring(0, 8))) """{"answer":{"error":true,"code":"x"}}"""
+                    else """{"answer":{"round":{"_id":"6a4af7f1ae633549bd0f0403","number":$num},"matches":[{"date":"2026-11-21T13:00:00.000Z","homeTeam":{"id":"tA","name":"A","slug":"a"},"awayTeam":{"id":"tB","name":"B","slug":"b"}}]}}"""
+                }
+                FutmondoApi.LINEUP -> """{"answer":{"strategy":"4-4-2","players":[${ids.take(11).joinToString(",") { """{"id":"$it"}""" }}],"bench":{"players":[]}}}"""
+                FutmondoApi.TEAM_INFO -> """{"answer":{"budget":1000000,"teamValue":100000000,"position":10,"configuration":{"maxPlayersInRoster":18}}}"""
+                FutmondoApi.MARKET -> """{"answer":[]}"""
+                else -> error(path)
+            }
+        }, s)
+        val (a, m) = FutmondoService(api).dailyReview()
+        assertEquals(13, a.round); assertNotNull(m)
+        assertEquals(1, calls[FutmondoApi.ROSTER]); assertEquals(1, calls[FutmondoApi.TEAM_INFO])
+        assertEquals(1, calls[FutmondoApi.LINEUP]); assertEquals(1, calls[FutmondoApi.MARKET])
+        // Jornada actual + como mucho 3 candidatos por cada jornada futura (2 jornadas): nunca más de 7.
+        assertTrue(calls[FutmondoApi.MATCHES]!! <= 7)
+        assertEquals(calls.values.sum(), api.requestCount)
+    }
 }

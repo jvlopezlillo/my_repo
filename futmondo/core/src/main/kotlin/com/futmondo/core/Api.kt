@@ -92,8 +92,13 @@ class FutmondoApi(private val http: HttpPoster, private var session: Session? = 
 
     fun setSession(s: Session?) { session = s }
 
+    /** Nº de peticiones hechas a la API con este cliente (para ver y limitar la carga). */
+    var requestCount: Int = 0
+        private set
+
     private fun post(path: String, query: JSONObject): JSONObject {
         require(path in READ_PATHS || path in WRITE_PATHS) { "Ruta no permitida: $path" }
+        requestCount++
         val s = session
         val body = JSONObject()
             .put("header", JSONObject().put("token", s?.token ?: "").put("userid", s?.userId ?: ""))

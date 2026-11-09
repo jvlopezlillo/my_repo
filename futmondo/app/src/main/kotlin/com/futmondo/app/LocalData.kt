@@ -43,6 +43,11 @@ class LocalData(context: Context) {
         get() = prefs.getBoolean("api_changed_notified", false)
         set(v) { prefs.edit().putBoolean("api_changed_notified", v).apply() }
 
+    /** Hora (ms) en que terminó la última revisión diaria automática: evita repetirla. */
+    var lastDailyDone: Long
+        get() = prefs.getLong("last_daily_done", 0L)
+        set(v) { prefs.edit().putLong("last_daily_done", v).apply() }
+
     var dailyEnabled: Boolean
         get() = prefs.getBoolean("daily_enabled", false)
         set(v) { prefs.edit().putBoolean("daily_enabled", v).apply() }

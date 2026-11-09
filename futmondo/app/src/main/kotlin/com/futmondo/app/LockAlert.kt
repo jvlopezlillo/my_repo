@@ -45,7 +45,7 @@ class LockAlertWorker(context: Context, params: WorkerParameters) : Worker(conte
         val c = Controller(ctx, FutmondoApi(AndroidHttp(), session))
         if (!c.data.dailyEnabled) return Result.success()
         return try {
-            val a = c.analyze(HistoryKind.AUTOMATICA, "(aviso de cierre) ")
+            val a = c.analyze(HistoryKind.AUTOMATICA, "(aviso de cierre) ", scheduleAlert = false)
             val imp = a.improvement
             if (imp != null && imp >= LockAlert.MIN_IMPROVEMENT) {
                 val changes = a.best.starters.filter { it.player.id !in a.current.starterIds }.map { it.player.name }
