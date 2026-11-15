@@ -66,8 +66,9 @@ class TextRun {
   final List<double> bbox; // x0, y0, x1, y1 (PDF, y hacia arriba)
   final List<double> color;
   final bool horizontal;
+  final Set<int> codes; // códigos de glifo usados en este texto
   const TextRun(this.opIndex, this.op, this.text, this.font, this.fontRes, this.fontSize,
-      this.effSize, this.origin, this.bbox, this.color, this.horizontal);
+      this.effSize, this.origin, this.bbox, this.color, this.horizontal, this.codes);
 }
 
 List<double> _mul(List<double> m, List<double> n) => [
@@ -118,11 +119,13 @@ List<TextRun> extractRuns(List<Op> ops, PdfFont? Function(String res) fontFor) {
       return;
     }
     final sb = StringBuffer();
+    final codes = <int>{};
     double tx = 0;
     for (final it in items) {
       if (it is PdfString) {
         for (final g in f.decode(it.bytes)) {
           sb.write(g.text);
+          codes.add(g.code);
           tx += (g.width / 1000 * gs.size + gs.tc + (!f.twoByte && g.code == 32 ? gs.tw : 0)) * gs.th;
         }
       } else if (it is num) {
@@ -142,7 +145,7 @@ List<TextRun> extractRuns(List<Op> ops, PdfFont? Function(String res) fontFor) {
         fs.abs() * math.sqrt(t[2] * t[2] + t[3] * t[3]),
         [t[2] * r + t[4], t[3] * r + t[5]],
         [xs.reduce(math.min), ys.reduce(math.min), xs.reduce(math.max), ys.reduce(math.max)],
-        [...gs.color], horiz));
+        [...gs.color], horiz, codes));
     tm = _mul([1, 0, 0, 1, tx, 0], tm);
   }
 

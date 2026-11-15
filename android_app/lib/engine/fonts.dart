@@ -84,6 +84,8 @@ class PdfFont {
   bool bold = false, italic = false, serif = false, mono = false;
   final Map<int, String> toUni = {};
   final Map<String, int> uniToCode = {};
+  /// Todos los códigos que dan el mismo carácter (p. ej. un «9» normal y otro negrita).
+  final Map<String, List<int>> candidates = {};
   final Map<int, double> widths = {};
   double defaultWidth = 500;
   bool supported = false;
@@ -154,9 +156,16 @@ class PdfFont {
     for (final e in toUni.entries) {
       if (e.value.length == 1 && e.value != '�') {
         uniToCode.putIfAbsent(e.value, () => e.key);
+        candidates.putIfAbsent(e.value, () => []).add(e.key);
       }
     }
-    if (!twoByte) uniToCode.removeWhere((_, c) => c > 255);
+    if (!twoByte) {
+      uniToCode.removeWhere((_, c) => c > 255);
+      for (final l in candidates.values) {
+        l.removeWhere((c) => c > 255);
+      }
+      candidates.removeWhere((_, l) => l.isEmpty);
+    }
     supported = uniToCode.isNotEmpty;
   }
 
@@ -220,11 +229,12 @@ class PdfFont {
   bool canEncode(String ch) => uniToCode.containsKey(ch);
 
   /// Cadena hexadecimal con los códigos de [text] (todos deben ser codificables).
-  String encodeHex(String text) {
+  String encodeHex(String text, [Map<String, int>? prefer]) {
     final n = twoByte ? 4 : 2;
     final sb = StringBuffer();
     for (final r in text.runes) {
-      final code = uniToCode[String.fromCharCode(r)]!;
+      final ch = String.fromCharCode(r);
+      final code = prefer?[ch] ?? uniToCode[ch]!;
       sb.write(code.toRadixString(16).toUpperCase().padLeft(n, '0'));
     }
     return sb.toString();

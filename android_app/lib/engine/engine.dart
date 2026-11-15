@@ -184,11 +184,12 @@ class PdfTextEngine {
       fbHex = '';
     }
 
+    final prefer = _chooseCodes(chk.span.page, run, chk.newText);
     for (final r in chk.newText.runes) {
       final ch = String.fromCharCode(r);
       if (f.canEncode(ch)) {
         flushFallback();
-        nativeHex += f.encodeHex(ch);
+        nativeHex += f.encodeHex(ch, prefer);
       } else if (ch.trim().isEmpty) {
         flushFallback();
         flushNative();
@@ -235,6 +236,57 @@ class PdfTextEngine {
       objs[pd.page.ref.num] = pageDict;
     }
     return appendRevision(doc, objs);
+  }
+
+  /// Cuando varios códigos dan el mismo carácter (fuentes que mezclan pesos), elige el
+  /// del propio texto y, si no está, el que más se usa junto a los glifos de este texto.
+  Map<String, int> _chooseCodes(int page, TextRun run, String text) {
+    final f = run.font;
+    final out = <String, int>{};
+    final own = <String, int>{};
+    for (final g in f.decode(_runBytes(run))) {
+      own.putIfAbsent(g.text, () => g.code);
+    }
+    List<TextRun>? all;
+    for (final r in text.runes) {
+      final ch = String.fromCharCode(r);
+      if (out.containsKey(ch)) continue;
+      final cands = f.candidates[ch];
+      if (cands == null || cands.length < 2) continue;
+      if (own.containsKey(ch)) {
+        out[ch] = own[ch]!;
+        continue;
+      }
+      all ??= [for (int i = 0; i < pageCount; i++) if (pageSupported(i)) ..._data(i).runs.where((x) => identical(x.font.dict, f.dict) || x.font.baseFont == f.baseFont)];
+      int best = -1, bestCode = cands.first;
+      for (final c in cands) {
+        int score = 0;
+        for (final x in all) {
+          if (identical(x, run) || !x.codes.contains(c)) continue;
+          score += x.codes.intersection(run.codes).length;
+        }
+        if (score > best) {
+          best = score;
+          bestCode = c;
+        }
+      }
+      out[ch] = bestCode;
+    }
+    return out;
+  }
+
+  Uint8List _runBytes(TextRun run) {
+    final b = BytesBuilder();
+    for (final a in run.op.args) {
+      if (a is PdfString) {
+        b.add(a.bytes);
+      } else if (a is List) {
+        for (final e in a) {
+          if (e is PdfString) b.add(e.bytes);
+        }
+      }
+    }
+    return b.toBytes();
   }
 
   String _freeFontName(_PageData pd) {
