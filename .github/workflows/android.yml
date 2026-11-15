@@ -48,3 +48,10 @@ jobs:
           files: |
             CastBrowser.apk
             CastBrowserTV.apk
+
+      - name: Pruebas del JavaScript de la página (informativo)
+        continue-on-error: true
+        working-directory: tools/jstest
+        run: |
+          npm install --no-audit --no-fund
+          npm test

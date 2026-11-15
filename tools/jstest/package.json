@@ -1,0 +1,7 @@
+{
+  "name": "castbrowser-jstest",
+  "private": true,
+  "description": "Pruebas del JavaScript que el navegador inyecta en las páginas (detección de vídeo y pantalla completa)",
+  "scripts": { "test": "node sniff_test.js && node fs_test.js" },
+  "devDependencies": { "jsdom": "24.1.3" }
+}

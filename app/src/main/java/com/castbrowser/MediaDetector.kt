@@ -199,6 +199,159 @@ object MediaDetector {
     return xhrSend.apply(this, arguments);
   };
 
+  // ---- Pantalla completa del vídeo, propia del navegador (no depende del botón de la web).
+  // Saca el <video> a la raíz de la página y lo pone a pantalla completa con el formato elegido.
+  // Si el vídeo está en un iframe, el iframe se expande desde la página que lo contiene.
+  var FS = { on: false, video: null, parent: null, next: null, style: null, controls: false,
+             mode: 'fit', htmlStyle: null, bodyStyle: null, tag: null, frames: [] };
+  var RATIOS = { r43: 4 / 3, r169: 16 / 9, r195: 19.5 / 9, r209: 20 / 9 };
+  function fsBox(mode, W, H){
+    var w = W, h = H, fit = 'contain';
+    if (mode === 'stretch') fit = 'fill';
+    else if (mode === 'fill') fit = 'cover';
+    else if (RATIOS[mode]) {
+      var r = RATIOS[mode];
+      if (W / H > r) { h = H; w = H * r; } else { w = W; h = W / r; }
+      fit = 'fill';
+    }
+    return { w: w, h: h, left: (W - w) / 2, top: (H - h) / 2, fit: fit };
+  }
+  function allVideos(root, out){
+    var vs = root.querySelectorAll('video');
+    for (var i = 0; i < vs.length; i++) out.push(vs[i]);
+    var all = root.querySelectorAll('*');
+    for (var j = 0; j < all.length; j++) { if (all[j].shadowRoot) allVideos(all[j].shadowRoot, out); }
+    return out;
+  }
+  function pickVideo(){
+    var vs = allVideos(document, []), best = null, score = -1;
+    for (var i = 0; i < vs.length; i++) {
+      var v = vs[i], r = v.getBoundingClientRect();
+      var s = (!v.paused && !v.ended ? 1e9 : 0) + r.width * r.height;
+      if (s > score) { score = s; best = v; }
+    }
+    return best;
+  }
+  function imp(el, p, val){ el.style.setProperty(p, val, 'important'); }
+  function fsLayout(){
+    var v = FS.video; if (!v) return;
+    var b = fsBox(FS.mode, window.innerWidth, window.innerHeight);
+    v.classList.add('__cast_fs_v');
+    imp(v, 'position', 'fixed'); imp(v, 'z-index', '2147483647'); imp(v, 'background', '#000');
+    imp(v, 'margin', '0'); imp(v, 'padding', '0'); imp(v, 'border', '0');
+    imp(v, 'max-width', 'none'); imp(v, 'max-height', 'none'); imp(v, 'transform', 'none');
+    imp(v, 'width', b.w + 'px'); imp(v, 'height', b.h + 'px');
+    imp(v, 'left', b.left + 'px'); imp(v, 'top', b.top + 'px'); imp(v, 'object-fit', b.fit);
+  }
+  function fsEnter(){
+    var v = (FS.on && FS.video) ? FS.video : pickVideo();
+    if (!v) return false;
+    if (!FS.on) {
+      FS.on = true; FS.video = v; FS.parent = v.parentNode; FS.next = v.nextSibling;
+      FS.style = v.getAttribute('style'); FS.controls = v.controls;
+      FS.htmlStyle = document.documentElement.getAttribute('style');
+      FS.bodyStyle = document.body.getAttribute('style');
+      try { document.body.appendChild(v); } catch (e) {}
+      imp(document.documentElement, 'overflow', 'hidden'); imp(document.documentElement, 'background', '#000');
+      imp(document.body, 'overflow', 'hidden'); imp(document.body, 'background', '#000');
+      try {
+        FS.tag = document.createElement('style');
+        FS.tag.textContent = 'html > body > :not(.__cast_fs_v){visibility:hidden !important}';
+        document.head.appendChild(FS.tag);
+      } catch (e) {}
+      v.controls = false;
+      window.addEventListener('resize', fsLayout);
+      window.addEventListener('orientationchange', fsLayout);
+    }
+    fsLayout();
+    try { CastBridge.onFs(true); } catch (e) {}
+    if (window !== window.top) { try { parent.postMessage({ __castFSUp: 1 }, '*'); } catch (e) {} }
+    return true;
+  }
+  function restoreAttr(el, name, val){ if (val === null || val === undefined) el.removeAttribute(name); else el.setAttribute(name, val); }
+  function fsRestoreFrames(){
+    while (FS.frames.length) {
+      var f = FS.frames.pop();
+      restoreAttr(f.el, 'style', f.style);
+    }
+  }
+  function fsExit(){
+    if (FS.on) {
+      var v = FS.video;
+      window.removeEventListener('resize', fsLayout);
+      window.removeEventListener('orientationchange', fsLayout);
+      try { if (FS.tag && FS.tag.parentNode) FS.tag.parentNode.removeChild(FS.tag); } catch (e) {}
+      v.classList.remove('__cast_fs_v');
+      restoreAttr(v, 'style', FS.style);
+      v.controls = FS.controls;
+      try {
+        if (FS.parent) {
+          if (FS.next && FS.next.parentNode === FS.parent) FS.parent.insertBefore(v, FS.next);
+          else FS.parent.appendChild(v);
+        }
+      } catch (e) {}
+      restoreAttr(document.documentElement, 'style', FS.htmlStyle);
+      restoreAttr(document.body, 'style', FS.bodyStyle);
+      FS.on = false; FS.video = null;
+    }
+    fsRestoreFrames();
+  }
+  // El vídeo está en un iframe de esta página: se expande el iframe (y se sueltan los recortes de sus contenedores).
+  function fsExpandFrame(source){
+    var frames = document.querySelectorAll('iframe,frame');
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i].contentWindow !== source) continue;
+      var el = frames[i];
+      for (var a = el; a && a !== document.documentElement; a = a.parentElement) {
+        FS.frames.push({ el: a, style: a.getAttribute('style') });
+        if (a !== el) {
+          imp(a, 'overflow', 'visible'); imp(a, 'transform', 'none'); imp(a, 'filter', 'none');
+          imp(a, 'contain', 'none'); imp(a, 'clip-path', 'none');
+        }
+      }
+      imp(el, 'position', 'fixed'); imp(el, 'left', '0'); imp(el, 'top', '0');
+      imp(el, 'width', '100vw'); imp(el, 'height', '100vh'); imp(el, 'max-width', 'none'); imp(el, 'max-height', 'none');
+      imp(el, 'border', '0'); imp(el, 'margin', '0'); imp(el, 'z-index', '2147483647'); imp(el, 'background', '#000');
+      imp(document.documentElement, 'overflow', 'hidden');
+      return;
+    }
+  }
+  function fsCmd(name, arg){
+    var v = FS.video || pickVideo(); if (!v) return;
+    try {
+      if (name === 'toggle') { if (v.paused) v.play(); else v.pause(); }
+      else if (name === 'seek') {
+        var t = v.currentTime + (arg || 0);
+        if (isFinite(v.duration)) t = Math.min(t, v.duration);
+        v.currentTime = Math.max(0, t);
+      }
+    } catch (e) {}
+  }
+  function fsForward(msg){
+    for (var i = 0; i < window.frames.length; i++) { try { window.frames[i].postMessage(msg, '*'); } catch (e) {} }
+  }
+  window.__castFS = {
+    enter: function(mode){ if (mode) FS.mode = mode; var ok = fsEnter(); fsForward({ __castFS: 'enter', mode: FS.mode }); return ok; },
+    mode: function(mode){ FS.mode = mode; fsLayout(); fsForward({ __castFS: 'mode', mode: mode }); },
+    exit: function(){ fsExit(); fsForward({ __castFS: 'exit' }); },
+    cmd: function(name, arg){ fsCmd(name, arg); fsForward({ __castFS: 'cmd', name: name, arg: arg }); },
+    box: fsBox
+  };
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if (!d || typeof d !== 'object') return;
+    if (d.__castFSUp) {
+      fsExpandFrame(e.source);
+      if (window !== window.top) { try { parent.postMessage({ __castFSUp: 1 }, '*'); } catch (x) {} }
+      return;
+    }
+    if (!d.__castFS) return;
+    if (d.__castFS === 'enter') { if (d.mode) FS.mode = d.mode; fsEnter(); fsForward(d); }
+    else if (d.__castFS === 'mode') { FS.mode = d.mode; fsLayout(); fsForward(d); }
+    else if (d.__castFS === 'exit') { fsExit(); fsForward(d); }
+    else if (d.__castFS === 'cmd') { fsCmd(d.name, d.arg); fsForward(d); }
+  });
+
   function pauseAll(){
     document.querySelectorAll('video,audio').forEach(function(v){ try { v.pause(); } catch(e){} });
     for (var i = 0; i < window.frames.length; i++) { try { window.frames[i].postMessage({__castPause:1}, '*'); } catch(e){} }

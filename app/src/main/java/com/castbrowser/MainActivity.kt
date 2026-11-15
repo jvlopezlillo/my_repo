@@ -88,6 +88,18 @@ class MainActivity : Activity() {
     // saltos automáticos a otras webs y redes publicitarias conocidas.
     private var localProxy: LocalProxy? = null
 
+    // Pantalla completa del vídeo (propia del navegador)
+    private lateinit var topBar: LinearLayout
+    private lateinit var fsButton: ImageButton
+    private lateinit var fsOverlay: FrameLayout
+    private lateinit var fsBar: LinearLayout
+    private lateinit var fsPlayPause: TextView
+    private lateinit var fsFormat: TextView
+    private var fsActive = false
+    @Volatile private var fsConfirmed = false
+    private var fsMode = "fit"
+    private val fsHide = Runnable { if (fsActive) fsBar.visibility = View.GONE }
+
     private var shield = true
     private var blockedTotal = 0
     private var lastBlockToast = 0L
@@ -109,6 +121,7 @@ class MainActivity : Activity() {
         net.onChanged = { main.postDelayed({ discovery.discoverNow() }, 1500) }
 
         shield = prefs.getBoolean("shield", true)
+        fsMode = prefs.getString("fsMode", "fit") ?: "fit"
         buildUi()
         setupWebView()
         webView.settings.setSupportMultipleWindows(shield)
@@ -161,6 +174,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            fsActive -> exitVideoFullscreen()
             customView != null -> hideCustomView()
             panel.visibility == View.VISIBLE && client == null -> panel.visibility = View.GONE
             webView.canGoBack() -> webView.goBack()
@@ -237,6 +251,7 @@ class MainActivity : Activity() {
         lateinit var menuButton: TextView
         menuButton = barButton("⋮") { showMenu(menuButton) }
         bar.addView(menuButton, LinearLayout.LayoutParams(dp(40), dp(44)))
+        topBar = bar
         column.addView(bar)
 
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -306,6 +321,35 @@ class MainActivity : Activity() {
         root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM).apply { setMargins(dp(10), 0, dp(10), dp(96)) })
 
+        // Controles de la pantalla completa del vídeo
+        fsOverlay = FrameLayout(this).apply {
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { toggleFsBar() }
+        }
+        fsBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#B3000000"))
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+        }
+        fun fsBtn(label: String, onClick: (View) -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setOnClickListener { onClick(it); scheduleFsHide() }
+        }.also { fsBar.addView(it) }
+        fsBtn("⏪ 10") { fsCmd("seek", -10) }
+        fsPlayPause = fsBtn("⏯") { fsCmd("toggle") }
+        fsBtn("10 ⏩") { fsCmd("seek", 10) }
+        fsFormat = fsBtn("Formato") { showFormatMenu(it) }
+        fsBtn("✕ Salir") { exitVideoFullscreen() }
+        fsOverlay.addView(fsBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        root.addView(fsOverlay)
+
         // Botón de Chromecast flotante
         castButton = ImageButton(this).apply {
             setImageResource(R.drawable.ic_cast)
@@ -322,6 +366,21 @@ class MainActivity : Activity() {
         }
         root.addView(castButton, FrameLayout.LayoutParams(dp(64), dp(64), Gravity.BOTTOM or Gravity.END)
             .apply { setMargins(0, 0, dp(20), dp(24)) })
+
+        // Botón de pantalla completa (sobre el de Chromecast)
+        fsButton = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_fullscreen)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#CC202124"))
+            }
+            elevation = dp(10).toFloat()
+            contentDescription = "Pantalla completa"
+            visibility = View.GONE
+            setOnClickListener { enterVideoFullscreen() }
+        }
+        root.addView(fsButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM or Gravity.END)
+            .apply { setMargins(0, 0, dp(28), dp(100)) })
 
         setContentView(root)
     }
@@ -387,6 +446,7 @@ class MainActivity : Activity() {
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                if (fsActive) exitVideoFullscreen()
                 if (!urlBar.hasFocus()) urlBar.setText(url)
                 captures.clear()
                 lastVideo = null
@@ -470,6 +530,99 @@ class MainActivity : Activity() {
                 toast("🛡️ Bloqueado: $kind")
             }
         }
+    }
+
+    // ------------------------------------------------------------------ pantalla completa del vídeo
+
+    private val fsModes = listOf(
+        "fit" to "Original (ajustar)", "r43" to "4:3", "r169" to "16:9", "r195" to "19,5:9",
+        "r209" to "20:9", "stretch" to "Estirar", "fill" to "Rellenar",
+    )
+
+    private fun fsLabel(key: String) = fsModes.firstOrNull { it.first == key }?.second ?: key
+
+    /** El botón sólo se ve cuando hay un vídeo y no se está enviando a una tele ni usando la pantalla completa de la web. */
+    private fun updateFsButton() {
+        val show = videoSeen && !fsActive && customView == null && client == null && !connecting
+        fsButton.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
+    private fun evalFs(js: String) = webView.evaluateJavascript("window.__castFS && $js", null)
+
+    private fun fsCmd(name: String, arg: Int = 0) = evalFs("window.__castFS.cmd('$name', $arg)")
+
+    private fun scheduleFsHide() {
+        main.removeCallbacks(fsHide)
+        main.postDelayed(fsHide, 3500)
+    }
+
+    private fun toggleFsBar() {
+        if (fsBar.visibility == View.VISIBLE) {
+            main.removeCallbacks(fsHide)
+            fsBar.visibility = View.GONE
+        } else {
+            fsBar.visibility = View.VISIBLE
+            scheduleFsHide()
+        }
+    }
+
+    private fun showFormatMenu(anchor: View) {
+        val m = PopupMenu(this, anchor)
+        fsModes.forEachIndexed { i, (key, label) -> m.menu.add(0, i, i, (if (key == fsMode) "✓  " else "     ") + label) }
+        m.setOnMenuItemClickListener { item -> setFsMode(fsModes[item.itemId].first); true }
+        m.show()
+    }
+
+    private fun setFsMode(key: String) {
+        fsMode = key
+        prefs.edit().putString("fsMode", key).apply()
+        fsFormat.text = "Formato: ${fsLabel(key)}"
+        evalFs("window.__castFS.mode('$key')")
+    }
+
+    /** Vídeo a pantalla completa y en horizontal, con el formato elegido y unos controles mínimos. */
+    private fun enterVideoFullscreen() {
+        if (fsActive || customView != null || client != null || connecting) return
+        fsActive = true
+        fsConfirmed = false
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        topBar.visibility = View.GONE
+        progress.visibility = View.GONE
+        fsButton.visibility = View.GONE
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        castButton.translationY = -dp(64).toFloat()
+        fsFormat.text = "Formato: ${fsLabel(fsMode)}"
+        fsPlayPause.text = if (lastVideo?.playing == true) "⏸" else "▶"
+        fsOverlay.visibility = View.VISIBLE
+        fsBar.visibility = View.VISIBLE
+        scheduleFsHide()
+        evalFs("window.__castFS.enter('$fsMode')")
+        // Si la página no tiene un <video> que se pueda poner a pantalla completa, se vuelve atrás.
+        main.postDelayed({
+            if (fsActive && !fsConfirmed) {
+                toast("No puedo poner este vídeo a pantalla completa")
+                exitVideoFullscreen()
+            }
+        }, 1500)
+    }
+
+    private fun exitVideoFullscreen() {
+        if (!fsActive) return
+        fsActive = false
+        evalFs("window.__castFS.exit()")
+        main.removeCallbacks(fsHide)
+        fsOverlay.visibility = View.GONE
+        castButton.translationY = 0f
+        topBar.visibility = View.VISIBLE
+        progress.visibility = View.INVISIBLE
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        updateFsButton()
     }
 
     // ------------------------------------------------------------------ proxy SOCKS5
@@ -648,6 +801,10 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ detección de vídeo
 
     private inner class Bridge {
+        /** El JavaScript de la página ha encontrado el vídeo y lo ha puesto a pantalla completa. */
+        @JavascriptInterface
+        fun onFs(ok: Boolean) { if (ok) fsConfirmed = true }
+
         /** Lista HLS/DASH reconocida por su contenido desde el JavaScript de la página. */
         @JavascriptInterface
         fun onStream(url: String, kind: String, page: String) {
@@ -682,6 +839,7 @@ class MainActivity : Activity() {
     }
 
     private fun onPageVideo(v: PageVideo, ev: String, isVideo: Boolean) {
+        if (fsActive) fsPlayPause.text = if (v.playing) "⏸" else "▶"
         val prev = lastVideo
         // Preferimos el <video> que se está reproduciendo.
         if (prev == null || v.playing || prev.src == v.src || !prev.playing) {
@@ -714,6 +872,7 @@ class MainActivity : Activity() {
             castButton.scaleX = 0.3f; castButton.scaleY = 0.3f
             castButton.animate().scaleX(1f).scaleY(1f).setDuration(200).start()
         }
+        updateFsButton()
     }
 
     // ------------------------------------------------------------------ envío
@@ -873,6 +1032,7 @@ class MainActivity : Activity() {
     }
 
     private fun startCast(deviceIn: CastDevice, cand: MediaCandidate, sample: Boolean = false) {
+        if (fsActive) exitVideoFullscreen()
         // Si el "DLNA" elegido es en realidad nuestra app de la tele, se usa la app: puede empujar el vídeo
         // (sirve con VPN) y entiende cookies y cabeceras. El DLNA necesita que la tele conecte con el móvil.
         val device = if (deviceIn.type == CastDevice.TYPE_DLNA)

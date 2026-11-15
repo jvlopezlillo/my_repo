@@ -51,6 +51,13 @@ Activa el punto de acceso del móvil y conecta la tele (Mi Box, Smart TV o Chrom
 El navegador detecta la red del punto de acceso, busca ahí las teles y les sirve el vídeo
 desde el móvil. Un Chromecast tiene que configurarse antes con la app Google Home en esa red.
 
+## Pantalla completa del vídeo
+Con un vídeo en la página aparece un botón de pantalla completa (encima del de Chromecast). Pone el vídeo a pantalla
+completa y en horizontal, con controles mínimos (pausa, ±10 s, formato, salir; tocar la pantalla los muestra u oculta).
+**Formato**: Original (ajustar), 4:3, 16:9, 19,5:9, 20:9, Estirar (llena deformando) y Rellenar (llena recortando).
+Funciona aunque la web esconda su propio botón; si el vídeo está en un iframe, se expande el iframe. Las pruebas del
+JavaScript están en `tools/jstest` (`npm install && npm test`).
+
 ## Proxy SOCKS5
 Menú ⋮ → **Proxy SOCKS5**: servidor, puerto y (si lo pide) usuario y contraseña; **Probar** muestra la IP con la
 que sales a internet. Con el proxy activado, la navegación y las descargas de vídeo que hace el móvil salen por él
