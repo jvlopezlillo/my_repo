@@ -14,8 +14,9 @@ Para un `.exe`: `build_windows.bat`.
 
 ## Cómo conserva la fuente
 1. Lee de cada fragmento de texto su fuente, tamaño, flags (negrita/cursiva), color y posición.
-2. Busca la fuente, por este orden: **incrustada en el PDF** (reconstruyendo su mapa
-   Unicode→glifo desde `ToUnicode`) → **instalada** en el sistema (o añadida por ti) →
+2. Busca la fuente, por este orden: **la propia fuente incrustada del PDF, reutilizando el mismo
+   objeto** (escribe los códigos de glifo directamente; funciona con TrueType/CFF/Type1 y CID
+   mediante `ToUnicode`) → fuente incrustada reconstruida → **instalada** en el sistema (o añadida por ti) →
    **estándar** (Helvetica/Times/Courier/Arial).
 3. Borra el texto viejo (redacción, sin tocar imágenes ni gráficos) y escribe el nuevo en el
    mismo origen con esa fuente, tamaño y color.

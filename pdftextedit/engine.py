@@ -58,10 +58,17 @@ class Span:
 
 @dataclass
 class FontChoice:
-    font: pymupdf.Font
+    font: Optional[pymupdf.Font]
     name: str
-    kind: str          # embedded | installed | user | equivalent | builtin
+    kind: str          # native | embedded | installed | user | equivalent | builtin
     path: Optional[str] = None
+    native: Optional["NativeFont"] = None
+
+    def has(self, ch: str) -> bool:
+        return self.native.has(ch) if self.native else self.font.has_glyph(ord(ch))
+
+    def missing(self, chars: set) -> set:
+        return {c for c in chars if not self.has(c)}
 
     @property
     def exact(self) -> bool:
@@ -93,8 +100,10 @@ def _visible(text: str) -> set[str]:
     return {c for c in text if not c.isspace()}
 
 
-def _covers(font: pymupdf.Font, chars: set[str]) -> set[str]:
+def _covers(font, chars: set[str]) -> set[str]:
     """Devuelve el subconjunto de `chars` que la fuente NO tiene."""
+    if isinstance(font, FontChoice):
+        return font.missing(chars)
     return {c for c in chars if not font.has_glyph(ord(c))}
 
 
@@ -193,6 +202,101 @@ def font_with_unicode_cmap(doc: "pymupdf.Document", xref: int) -> Optional[bytes
     return out.getvalue()
 
 
+class NativeFont:
+    """Reutiliza *la propia fuente del PDF* (mismo objeto, mismos glifos) escribiendo
+    códigos directamente en el contenido de la página. Es la opción más fiel: funciona con
+    cualquier fuente incrustada (TrueType, CFF, Type1) que tenga ToUnicode."""
+
+    def __init__(self, doc, xref: int, res_name: str):
+        self.doc, self.xref, self.res_name = doc, xref, res_name
+        self.name = res_name
+        self.ok = False
+        self.u2c: dict[str, int] = {}
+        self.widths: dict[int, float] = {}
+        self.dw = 1000.0
+        self.two_byte = False
+        try:
+            self._load()
+        except Exception:
+            self.ok = False
+
+    # -- carga
+    def _load(self):
+        d = self.doc
+        subtype = d.xref_get_key(self.xref, "Subtype")[1]
+        kind, val = d.xref_get_key(self.xref, "ToUnicode")
+        if kind != "xref":
+            return
+        tu = parse_tounicode(d.xref_stream(int(val.split()[0])))
+        for code, txt in tu.items():
+            if len(txt) == 1 and txt != "\ufffd":
+                self.u2c.setdefault(txt, code)
+        if subtype == "/Type0":
+            if d.xref_get_key(self.xref, "Encoding")[1] not in ("/Identity-H",):
+                return
+            self.two_byte = True
+            k, v = d.xref_get_key(self.xref, "DescendantFonts")
+            desc = int(re.search(r"(\d+) 0 R", v).group(1)) if k != "null" else None
+            if desc is None:
+                return
+            k, v = d.xref_get_key(desc, "DW")
+            self.dw = float(v) if k != "null" else 1000.0
+            k, v = d.xref_get_key(desc, "W")
+            if k == "xref":
+                v = d.xref_object(int(v.split()[0]), compressed=False)
+            if k != "null":
+                self._parse_w(v)
+        elif subtype in ("/TrueType", "/Type1", "/MMType1"):
+            self.two_byte = False
+            k, v = d.xref_get_key(self.xref, "FirstChar")
+            first = int(v) if k != "null" else 0
+            k, v = d.xref_get_key(self.xref, "Widths")
+            if k == "xref":
+                v = d.xref_object(int(v.split()[0]), compressed=False)
+            if k != "null":
+                for i, w in enumerate(re.findall(r"[-\d.]+", v)):
+                    self.widths[first + i] = float(w)
+            k, v = d.xref_get_key(self.xref, "FontDescriptor")
+            self.dw = 0.0
+            # solo códigos de 1 byte
+            self.u2c = {u: c for u, c in self.u2c.items() if c < 256}
+        else:
+            return
+        self.ok = bool(self.u2c)
+
+    def _parse_w(self, v: str):
+        toks = re.findall(r"\[|\]|[-\d.]+", v)
+        i = 0
+        # saltar corchete externo
+        if toks and toks[0] == "[":
+            toks = toks[1:]
+        while i < len(toks):
+            if toks[i] == "]":
+                i += 1; continue
+            a = int(float(toks[i])); i += 1
+            if i < len(toks) and toks[i] == "[":
+                i += 1
+                c = a
+                while i < len(toks) and toks[i] != "]":
+                    self.widths[c] = float(toks[i]); c += 1; i += 1
+                i += 1
+            elif i + 1 < len(toks):
+                b = int(float(toks[i])); w = float(toks[i + 1]); i += 2
+                for c in range(a, b + 1):
+                    self.widths[c] = w
+
+    # -- uso
+    def has(self, ch: str) -> bool:
+        return ch in self.u2c
+
+    def width(self, text: str, size: float) -> float:
+        return sum(self.widths.get(self.u2c.get(c, -1), self.dw) for c in text) * size / 1000.0
+
+    def encode(self, text: str) -> str:
+        n = 4 if self.two_byte else 2
+        return "".join(format(self.u2c[c], f"0{n}X") for c in text)
+
+
 class PdfEditor:
     MAX_UNDO = 30
 
@@ -273,6 +377,20 @@ class PdfEditor:
         return best
 
     # ------------------------------------------------------------ fuentes
+    def _native_font(self, span: Span) -> Optional[FontChoice]:
+        page = self.doc[span.page]
+        for xref, _e, _t, basefont, name, _enc, ref in page.get_fonts(full=True):
+            if ref != 0 or strip_subset(basefont) != span.font:
+                continue   # solo fuentes de los recursos de la página
+            key = ("n", xref, name)
+            if key not in self._emb_cache:
+                nf = NativeFont(self.doc, xref, name)
+                self._emb_cache[key] = nf if nf.ok else None
+            nf = self._emb_cache[key]
+            if nf:
+                return FontChoice(None, span.font, "native", native=nf)
+        return None
+
     def _embedded_font(self, span: Span) -> Optional[FontChoice]:
         page = self.doc[span.page]
         for xref, ext, _t, basefont, _n, _enc in page.get_fonts(full=False):
@@ -354,9 +472,9 @@ class PdfEditor:
                 if f:
                     cands.append(FontChoice(f, e.full or e.family, "equivalent", e.path))
         for c in cands:
-            if not _covers(c.font, chars):
+            if not c.missing(chars):
                 return c
-        return min(cands, key=lambda c: len(_covers(c.font, chars)))
+        return min(cands, key=lambda c: len(c.missing(chars)))
 
     # ------------------------------------------------------------ comprobar
     def check_edit(self, span: Span, new_text: str, user_font: Optional[str] = None) -> EditCheck:
@@ -369,6 +487,9 @@ class PdfEditor:
             u = self._user_font(user_font)
             if u:
                 cands.append(u)
+        nat = self._native_font(span)
+        if nat:
+            cands.append(nat)
         emb = self._embedded_font(span)
         if emb:
             cands.append(emb)
@@ -384,7 +505,7 @@ class PdfEditor:
             return chk
         best, best_missing = None, None
         for c in cands:
-            miss = _covers(c.font, need)
+            miss = c.missing(need)
             if not miss:
                 chk.primary = c
                 return chk
@@ -430,7 +551,7 @@ class PdfEditor:
 
         # ¿qué fuente para cada carácter?
         def font_for(ch: str) -> FontChoice:
-            if chk.primary and (ch.isspace() or chk.primary.font.has_glyph(ord(ch))):
+            if chk.primary and (ch.isspace() or chk.primary.has(ch)):
                 return chk.primary
             return self.equivalent_font(span, {ch})
         runs: list[tuple[str, FontChoice]] = []
@@ -452,10 +573,52 @@ class PdfEditor:
         # 2) escribir el nuevo en el mismo origen, con la misma fuente/tamaño/color
         tw = pymupdf.TextWriter(page.rect)
         pos = pymupdf.Point(*span.origin)
+        native_ops: list[str] = []
+        inv = ~page.transformation_matrix
         for run, fc in runs:
-            pos = self._append(tw, pos, run, fc.font, span.size)
+            if fc.native:
+                pos = self._native_run(native_ops, inv, pos, run, fc, span)
+            else:
+                pos = self._append(tw, pos, run, fc.font, span.size)
         tw.write_text(page, color=span.color)
+        if native_ops:
+            self._add_native_content(page, native_ops, span.color,
+                                     {fc.native for _t, fc in runs if fc.native})
         self.dirty = True
+
+    @staticmethod
+    def _native_run(ops, inv, pos, run, fc, span):
+        nf = fc.native
+        seg = ""
+        def flush(seg, pos):
+            if not seg:
+                return pos
+            p = pymupdf.Point(pos) * inv
+            ops.append(f"BT /{nf.res_name} {span.size:.4f} Tf 1 0 0 1 {p.x:.4f} {p.y:.4f} Tm "
+                       f"<{nf.encode(seg)}> Tj ET")
+            return pymupdf.Point(pos.x + nf.width(seg, span.size), pos.y)
+        for ch in run:
+            if ch.isspace() and not nf.has(ch):
+                pos = flush(seg, pos); seg = ""
+                pos = pymupdf.Point(pos.x + span.size * 0.28, pos.y)
+            else:
+                seg += ch
+        return flush(seg, pos)
+
+    def _add_native_content(self, page, ops, color, natives):
+        # la redacción puede haber retirado de los recursos una fuente que ya no se usaba
+        for nf in natives:
+            have = {n for _x, _e, _t, _b, n, _en, ref in page.get_fonts(full=True) if ref == 0}
+            if nf.res_name not in have:
+                self.doc.xref_set_key(page.xref, f"Resources/Font/{nf.res_name}", f"{nf.xref} 0 R")
+        page.wrap_contents()
+        r, g, b = color
+        data = ("q\n" + f"{r:.4f} {g:.4f} {b:.4f} rg\n" + "\n".join(ops) + "\nQ\n").encode()
+        x = self.doc.get_new_xref()
+        self.doc.update_object(x, "<<>>")
+        self.doc.update_stream(x, data)
+        arr = " ".join(f"{c} 0 R" for c in page.get_contents() + [x])
+        self.doc.xref_set_key(page.xref, "Contents", f"[{arr}]")
 
     @staticmethod
     def _append(tw: pymupdf.TextWriter, pos: pymupdf.Point, text: str, font: pymupdf.Font,

@@ -18,6 +18,7 @@ from .engine import EditCheck, PdfEditor, Span
 from .fonts import system_font_dirs, user_font_dir
 
 KIND_TEXT = {
+    "native": "la propia fuente incrustada del PDF (idéntica)",
     "embedded": "incrustada en el PDF",
     "installed": "instalada en el sistema",
     "user": "fuente aportada por ti",
