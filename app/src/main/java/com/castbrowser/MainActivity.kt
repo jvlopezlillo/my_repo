@@ -86,6 +86,8 @@ class MainActivity : Activity() {
 
     // Protección anti-publicidad: bloquea ventanas emergentes, apertura de otras apps,
     // saltos automáticos a otras webs y redes publicitarias conocidas.
+    private var localProxy: LocalProxy? = null
+
     private var shield = true
     private var blockedTotal = 0
     private var lastBlockToast = 0L
@@ -121,7 +123,8 @@ class MainActivity : Activity() {
         }
 
         val start = intent?.dataString ?: prefs.getString("home", HOME)!!
-        webView.loadUrl(start)
+        // Con proxy activado, la primera página no se pide hasta que el WebView lo esté usando (si no, saldría sin él).
+        applyProxy { webView.loadUrl(start) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -144,6 +147,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        localProxy?.close()
         client?.stop()
         pushStreamer?.stop()
         proxy?.close()
@@ -468,6 +472,111 @@ class MainActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------------ proxy SOCKS5
+
+    private fun loadSocksConfig(): Socks5Config? {
+        if (!prefs.getBoolean("socks_on", false)) return null
+        val host = prefs.getString("socks_host", "").orEmpty().trim()
+        if (host.isEmpty()) return null
+        return Socks5Config(host, prefs.getInt("socks_port", 1080), prefs.getString("socks_user", "").orEmpty(),
+            prefs.getString("socks_pass", "").orEmpty())
+    }
+
+    /**
+     * Aplica el proxy a la navegación (WebView) y a las descargas de vídeo del móvil, y avisa cuando está
+     * listo. Las conexiones con la tele (Chromecast, DLNA, app de la tele) NO pasan por el proxy.
+     */
+    private fun applyProxy(then: () -> Unit) {
+        val cfg = loadSocksConfig()
+        localProxy?.close()
+        localProxy = null
+        val supported = WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)
+        if (cfg == null) {
+            Upstream.proxy = null
+            if (supported) {
+                androidx.webkit.ProxyController.getInstance().clearProxyOverride({ r -> r.run() }, { main.post(then) })
+            } else main.post(then)
+            return
+        }
+        val lp = LocalProxy(cfg, ::diag).also { it.start() }
+        localProxy = lp
+        Upstream.proxy = java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", lp.port))
+        diag("Proxy SOCKS5 activo: ${cfg.label} (puente local en 127.0.0.1:${lp.port})")
+        if (!supported) {
+            toast("Este WebView no admite proxy: sólo se usará para los vídeos")
+            main.post(then)
+            return
+        }
+        val config = androidx.webkit.ProxyConfig.Builder().addProxyRule("127.0.0.1:${lp.port}").build()
+        androidx.webkit.ProxyController.getInstance().setProxyOverride(config, { r -> r.run() }, { main.post(then) })
+    }
+
+    private fun showProxyDialog() {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        fun field(hint: String, value: String, type: Int) = EditText(this).apply {
+            this.hint = hint
+            setText(value)
+            inputType = type
+            setSingleLine()
+        }.also { col.addView(it) }
+        val host = field("Servidor (por ejemplo 203.0.113.5)", prefs.getString("socks_host", "").orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val port = field("Puerto (normalmente 1080)", prefs.getInt("socks_port", 1080).toString(), InputType.TYPE_CLASS_NUMBER)
+        val user = field("Usuario (si lo pide)", prefs.getString("socks_user", "").orEmpty(), InputType.TYPE_CLASS_TEXT)
+        val pass = field("Contraseña (si la pide)", prefs.getString("socks_pass", "").orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        val on = android.widget.CheckBox(this).apply {
+            text = "Usar este proxy para navegar y para los vídeos"
+            isChecked = prefs.getBoolean("socks_on", false)
+        }
+        col.addView(on)
+        col.addView(TextView(this).apply {
+            text = "Las conexiones con la tele (Chromecast, DLNA y la app de la tele) no pasan por el proxy."
+            textSize = 12f
+            setPadding(0, dp(8), 0, dp(8))
+        })
+
+        fun parse(): Socks5Config? {
+            val h = host.text.toString().trim()
+            val p = port.text.toString().trim().toIntOrNull()
+            if (h.isEmpty() || p == null || p !in 1..65535) { toast("Escribe el servidor y un puerto válido"); return null }
+            return Socks5Config(h, p, user.text.toString(), pass.text.toString())
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Proxy SOCKS5")
+            .setView(android.widget.ScrollView(this).apply { addView(col) })
+            .setPositiveButton("Guardar") { _, _ ->
+                val cfg = parse() ?: return@setPositiveButton
+                prefs.edit()
+                    .putString("socks_host", cfg.host).putInt("socks_port", cfg.port)
+                    .putString("socks_user", cfg.user).putString("socks_pass", cfg.pass)
+                    .putBoolean("socks_on", on.isChecked).apply()
+                applyProxy { webView.reload() }
+                toast(if (on.isChecked) "Proxy activado: ${cfg.label}" else "Proxy desactivado")
+            }
+            .setNeutralButton("Probar", null)
+            .setNegativeButton("Cancelar", null)
+            .create()
+        dialog.show()
+        // "Probar" no cierra el cuadro para poder corregir los datos.
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            val cfg = parse() ?: return@setOnClickListener
+            toast("Probando ${cfg.label}…")
+            Thread {
+                val msg = try {
+                    "✅ Funciona. Sales a internet con la IP ${Socks5.checkExitIp(cfg)}"
+                } catch (e: Exception) {
+                    "❌ ${e.message ?: e.javaClass.simpleName}"
+                }
+                main.post { AlertDialog.Builder(this).setTitle("Prueba del proxy").setMessage(msg).setPositiveButton("Vale", null).show() }
+            }.start()
+        }
+    }
+
     private fun hideCustomView() {
         val v = customView ?: return
         fullscreen.removeView(v)
@@ -506,6 +615,7 @@ class MainActivity : Activity() {
         m.menu.add(0, 9, 0, "Protección anti-publicidad: " +
             (if (shield) "ACTIVADA ($blockedTotal bloqueos)" else "desactivada"))
         m.menu.add(0, 10, 0, "Calidad de vídeo HLS: " + if (hlsFixedQuality()) "fija (la mejor)" else "automática")
+        m.menu.add(0, 11, 0, "Proxy SOCKS5: " + (loadSocksConfig()?.let { "activo (${it.label})" } ?: "desactivado"))
         m.menu.add(0, 8, 0, "Diagnóstico (registro)")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -517,6 +627,7 @@ class MainActivity : Activity() {
                 6 -> webView.loadUrl(prefs.getString("home", HOME)!!)
                 7 -> showDevicePicker(SAMPLES, 0, sample = true)
                 8 -> showDiagnostics()
+                11 -> showProxyDialog()
                 10 -> {
                     val fixed = !hlsFixedQuality()
                     prefs.edit().putString("hlsQuality", if (fixed) "fixed" else "auto").apply()
@@ -649,7 +760,7 @@ class MainActivity : Activity() {
     }
 
     private fun fetchHead(u: String, headers: Map<String, String>): Pair<String?, String>? = try {
-        val c = URL(u).openConnection() as HttpURLConnection
+        val c = Upstream.open(u)
         c.connectTimeout = 5000
         c.readTimeout = 5000
         headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
@@ -780,7 +891,7 @@ class MainActivity : Activity() {
         diag("──── Enviar a ${device.name} (${device.ip}:${device.port}, ${device.via})")
         if (device !== deviceIn) diag("Ese DLNA es la app CastBrowser TV: se usa la app (mejor con VPN)")
         diag("Vídeo: ${cand.kind} ${cand.url.take(200)}")
-        diag("VPN activa: ${net.isVpnActive()} · modo: $mode")
+        diag("VPN activa: ${net.isVpnActive()} · modo: $mode · proxy SOCKS5: ${loadSocksConfig()?.label ?: "no"}")
         diag("Redes locales: ${net.localLinks().joinToString { it.label }.ifEmpty { "ninguna" }}")
         panelTitle.text = "📺 ${device.name}"
         panelStatus.text = "Conectando…"
@@ -997,7 +1108,7 @@ class MainActivity : Activity() {
 
     /** Las listas HLS con segmentos fMP4 necesitan avisarse al receptor. */
     private fun fetchHlsText(u: String, headers: Map<String, String>): String? = try {
-        val c = URL(u).openConnection() as HttpURLConnection
+        val c = Upstream.open(u)
         c.connectTimeout = 5000
         c.readTimeout = 5000
         headers.forEach { (k, v) -> c.setRequestProperty(k, v) }

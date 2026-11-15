@@ -129,7 +129,7 @@ class MediaProxy(
     private val tsCounter = AtomicInteger(0)
 
     private fun fetchBytes(url: String, headers: Map<String, String>): ByteArray {
-        val c = URL(url).openConnection() as HttpURLConnection
+        val c = Upstream.open(url)
         c.instanceFollowRedirects = true
         c.connectTimeout = 15_000
         c.readTimeout = 30_000
@@ -271,7 +271,7 @@ class MediaProxy(
         originHeaders: Map<String, String>,
         out: OutputStream,
     ) {
-        val conn = URL(target).openConnection() as HttpURLConnection
+        val conn = Upstream.open(target)
         conn.instanceFollowRedirects = true
         conn.connectTimeout = 15_000
         conn.readTimeout = 30_000
