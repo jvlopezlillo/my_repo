@@ -51,6 +51,13 @@ Activa el punto de acceso del móvil y conecta la tele (Mi Box, Smart TV o Chrom
 El navegador detecta la red del punto de acceso, busca ahí las teles y les sirve el vídeo
 desde el móvil. Un Chromecast tiene que configurarse antes con la app Google Home en esa red.
 
+## Proxy SOCKS5
+Menú ⋮ → **Proxy SOCKS5**: servidor, puerto y (si lo pide) usuario y contraseña; **Probar** muestra la IP con la
+que sales a internet. Con el proxy activado, la navegación y las descargas de vídeo que hace el móvil salen por él
+(los nombres de las webs los resuelve el proxy). Las conexiones con la tele (Chromecast, DLNA, app de la tele) siguen
+siendo directas por la red local, así que no hace falta una VPN en el móvil. Si el proxy falla, la web da error: nunca
+se salta el proxy. Un Chromecast/tele en modo "directo" descarga con su propia conexión, no con el proxy.
+
 ## Con VPN
 La búsqueda y la conexión se hacen atando los sockets a la red **Wi-Fi** en vez de a la VPN,
 y además:
