@@ -1,9 +1,9 @@
-name: Android APK
+name: PDF Text Edit Android
 
 on:
   push:
     branches: ['ccr-*', main, master]
-    paths: ['android_app/**', '.github/workflows/android.yml']
+    paths: ['android_app/**', '.github/workflows/pdftextedit-android.yml']
   workflow_dispatch:
 
 permissions:
@@ -36,7 +36,7 @@ jobs:
       - name: Publicar APK en una release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-latest
+          tag_name: pdftextedit-android-latest
           name: PDF Text Edit (Android, última versión)
           prerelease: true
           files: android_app/build/app/outputs/flutter-apk/app-release.apk
