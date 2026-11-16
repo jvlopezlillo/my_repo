@@ -1,0 +1,43 @@
+name: PDF Text Edit Windows
+
+on:
+  push:
+    branches: ['ccr-*', main, master]
+    paths: ['pdftextedit/**', 'run_pdftextedit.py', 'requirements.txt', 'tests/**', '.github/workflows/pdftextedit-windows.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pyinstaller pytest reportlab
+      - name: Tests del motor
+        run: python -m pytest -q tests
+        continue-on-error: true   # los tests usan fuentes de Linux; no bloquean el .exe
+      - name: Compilar .exe
+        run: pyinstaller --noconfirm --windowed --name PDFTextEdit --collect-all pymupdf --hidden-import fontTools.ttLib run_pdftextedit.py
+      - name: Comprobar que arranca
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\PDFTextEdit\PDFTextEdit.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { Write-Error "El ejecutable se cerró al arrancar (código $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+      - run: Compress-Archive -Path dist\PDFTextEdit\* -DestinationPath PDFTextEdit-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDFTextEdit-windows
+          path: PDFTextEdit-windows.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pdftextedit-windows-latest
+          name: PDF Text Edit (Windows, última versión)
+          prerelease: true
+          files: PDFTextEdit-windows.zip

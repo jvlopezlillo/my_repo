@@ -10,7 +10,7 @@ python -m pdftextedit [archivo.pdf]
 ```
 Pulsa sobre un texto → se muestra su fuente, tamaño, estilo, color y de dónde sale la
 fuente → escribe el nuevo texto → Enter. Deshacer/Rehacer y Guardar/Guardar como.
-Para un `.exe`: `build_windows.bat`.
+Para un `.exe`: `build_windows.bat`, o descárgalo ya compilado desde la release `pdftextedit-windows-latest` (lo genera GitHub Actions).
 
 ## Cómo conserva la fuente
 1. Lee de cada fragmento de texto su fuente, tamaño, flags (negrita/cursiva), color y posición.
