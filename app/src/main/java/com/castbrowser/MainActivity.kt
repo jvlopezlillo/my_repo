@@ -95,6 +95,7 @@ class MainActivity : Activity() {
     private lateinit var fsBar: LinearLayout
     private lateinit var fsPlayPause: TextView
     private lateinit var fsFormat: TextView
+    private lateinit var fsCast: TextView
     private var fsActive = false
     @Volatile private var fsConfirmed = false
     private var fsMode = "fit"
@@ -345,6 +346,11 @@ class MainActivity : Activity() {
         fsPlayPause = fsBtn("⏯") { fsCmd("toggle") }
         fsBtn("10 ⏩") { fsCmd("seek", 10) }
         fsFormat = fsBtn("Formato") { showFormatMenu(it) }
+        // Enviar a la tele, dentro de la barra (en pantalla completa no hay botón flotante sobre el vídeo).
+        fsCast = fsBtn("📺 Enviar") { onCastButton(false) }.apply {
+            visibility = View.GONE
+            setOnLongClickListener { onCastButton(true); true }
+        }
         fsBtn("✕ Salir") { exitVideoFullscreen() }
         fsOverlay.addView(fsBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
@@ -593,7 +599,7 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        castButton.translationY = -dp(64).toFloat()
+        updateCastButton()
         fsFormat.text = "Formato: ${fsLabel(fsMode)}"
         fsPlayPause.text = if (lastVideo?.playing == true) "⏸" else "▶"
         fsOverlay.visibility = View.VISIBLE
@@ -615,7 +621,7 @@ class MainActivity : Activity() {
         evalFs("window.__castFS.exit()")
         main.removeCallbacks(fsHide)
         fsOverlay.visibility = View.GONE
-        castButton.translationY = 0f
+        updateCastButton()
         topBar.visibility = View.VISIBLE
         progress.visibility = View.INVISIBLE
         @Suppress("DEPRECATION")
@@ -863,8 +869,10 @@ class MainActivity : Activity() {
     private fun updateCastButton() {
         val casting = client != null || connecting
         val show = casting || (videoSeen && discovery.availableDevices().isNotEmpty())
+        // En pantalla completa el botón flotante se esconde y se usa el de la barra de controles.
+        fsCast.visibility = if (show && fsActive) View.VISIBLE else View.GONE
         val wasHidden = castButton.visibility != View.VISIBLE
-        castButton.visibility = if (show) View.VISIBLE else View.GONE
+        castButton.visibility = if (show && !fsActive) View.VISIBLE else View.GONE
         (castButton.background as GradientDrawable).setColor(
             Color.parseColor(if (client != null) "#188038" else "#1A73E8")
         )
