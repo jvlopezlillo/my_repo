@@ -33,6 +33,7 @@ class Span:
     flags: int
     color: tuple         # (r, g, b) 0..1
     horizontal: bool = True
+    field_xref: int = 0  # >0: campo de formulario (widget) en vez de texto de la página
 
     @property
     def bold(self) -> bool:
@@ -94,6 +95,14 @@ class EditCheck:
     @property
     def search_query(self) -> str:
         return f"{self.span.font} font download"
+
+
+def winansi_ok(ch: str) -> bool:
+    try:
+        ch.encode("cp1252")
+        return True
+    except UnicodeEncodeError:
+        return False
 
 
 def _visible(text: str) -> set[str]:
@@ -365,7 +374,75 @@ class PdfEditor:
                     out.append(Span(page_no, s["text"], tuple(s["bbox"]), tuple(s["origin"]),
                                     strip_subset(s["font"]), s["size"], s["flags"], col,
                                     horizontal=abs(dy) < 1e-3 and dx > 0))
+        fields = self._field_spans(page_no)
+        if fields:
+            rects = [pymupdf.Rect(f.bbox) for f in fields]
+            out = [sp for sp in out
+                   if not any(r.contains(pymupdf.Rect(sp.bbox).tl + (pymupdf.Rect(sp.bbox).br - pymupdf.Rect(sp.bbox).tl) * 0.5)
+                              for r in rects)]
+            out += fields
         return out
+
+    # ------------------------------------------------------------ formularios
+    _STD_FONT_NAMES = {"helv": "helv", "hebo": "hebo", "heob": "hebo", "heit": "heit", "hebi": "hebi",
+                       "tiro": "tiro", "tibo": "tibo", "tiit": "tiit", "tibi": "tibi",
+                       "cour": "cour", "cobo": "cobo", "coit": "coit", "cobi": "cobi"}
+
+    def _field_spans(self, page_no: int) -> list[Span]:
+        page = self.doc[page_no]
+        out = []
+        for w in page.widgets():
+            if w.field_type_string != "Text" or w.field_value in (None, ""):
+                continue
+            if w.field_flags & (1 << 12) or w.field_flags & (1 << 24):   # multilínea / comb
+                continue
+            info = self._field_ap_info(w.xref)
+            if info is None:
+                continue
+            name, size, color = info
+            r = w.rect
+            out.append(Span(page_no, str(w.field_value), tuple(r), (r.x0 + 2, r.y1 - 4),
+                            name, size, self._flags_for(name), color, True, w.xref))
+        return out
+
+    @staticmethod
+    def _flags_for(name: str) -> int:
+        n = name.lower()
+        fl = 0
+        if "bold" in n or n.endswith("bo") or "bd" in n: fl |= FLAG_BOLD
+        if "ital" in n or "obli" in n or n.endswith("it") or n.endswith("ob"): fl |= FLAG_ITALIC
+        if "times" in n or n.startswith("ti"): fl |= FLAG_SERIF
+        if "cour" in n or n.startswith("co"): fl |= FLAG_MONO
+        return fl
+
+    def _field_ap_info(self, xref: int):
+        """(nombre de fuente, tamaño, color) del aspecto actual del campo."""
+        k, v = self.doc.xref_get_key(xref, "AP/N")
+        if k != "xref":
+            return None
+        stream = self.doc.xref_stream(int(v.split()[0])) or b""
+        tfs = re.findall(rb"/(\S+)\s+([\d.]+)\s+Tf", stream)
+        if not tfs:
+            return None
+        res, size = tfs[-1]
+        size = float(size)
+        base = res.decode("latin1")
+        # nombre real (BaseFont) desde /DR del AcroForm
+        try:
+            cat = self.doc.pdf_catalog()
+            kk, af = self.doc.xref_get_key(cat, "AcroForm")
+            afx = int(af.split()[0]) if kk == "xref" else None
+            if afx:
+                kf, fv = self.doc.xref_get_key(afx, f"DR/Font/{base}")
+                if kf == "xref":
+                    kb, bv = self.doc.xref_get_key(int(fv.split()[0]), "BaseFont")
+                    if kb == "name":
+                        base = bv.lstrip("/")
+        except Exception:
+            pass
+        m = re.search(rb"([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg", stream)
+        col = tuple(float(x) for x in m.groups()) if m else (0.0, 0.0, 0.0)
+        return base, size, col
 
     def span_at(self, page_no: int, x: float, y: float) -> Optional[Span]:
         best = None
@@ -480,6 +557,13 @@ class PdfEditor:
     def check_edit(self, span: Span, new_text: str, user_font: Optional[str] = None) -> EditCheck:
         need = _visible(new_text)
         chk = EditCheck(span, new_text, None)
+        if span.field_xref:
+            f = load_font(builtin=builtin_for(span.bold, span.italic, span.serif, span.mono))
+            chk.primary = FontChoice(f, span.font + " (campo de formulario)", "builtin")
+            chk.missing = sorted(c for c in need if winansi_ok(c) is False)
+            chk.notes.append("Campo de formulario: se conserva su fuente y tamaño; "
+                             "solo admite caracteres Latin-1/WinAnsi.")
+            return chk
         if not span.horizontal:
             chk.notes.append("Texto no horizontal: la edición puede no ser exacta.")
         cands: list[FontChoice] = []
@@ -547,6 +631,13 @@ class PdfEditor:
         if not chk.ok and not allow_equivalent:
             raise MissingGlyphsError(chk)
         span, text = chk.span, chk.new_text
+        if span.field_xref:
+            if chk.missing:
+                raise MissingGlyphsError(chk)
+            self._snapshot()
+            self._apply_field(span, text)
+            self.dirty = True
+            return
         page = self.doc[span.page]
 
         # ¿qué fuente para cada carácter?
@@ -585,6 +676,44 @@ class PdfEditor:
             self._add_native_content(page, native_ops, span.color,
                                      {fc.native for _t, fc in runs if fc.native})
         self.dirty = True
+
+    def _apply_field(self, span: Span, text: str):
+        """Cambia el valor de un campo de formulario y su aspecto, conservando
+        la fuente, el tamaño (reduciéndolo solo si no cabe) y la posición."""
+        doc, x = self.doc, span.field_xref
+        kind, v = doc.xref_get_key(x, "AP/N")
+        n = int(v.split()[0])
+        stream = doc.xref_stream(n)
+        _kb, bbox = doc.xref_get_key(n, "BBox")
+        bw = float(bbox.strip("[] ").split()[2]) if bbox and bbox != "null" else 1e9
+        font = load_font(builtin=builtin_for(span.bold, span.italic, span.serif, span.mono))
+        size = span.size
+        width = font.text_length(text, fontsize=size)
+        avail = bw - 4
+        if width > avail > 0:                      # como un visor con tamaño automático
+            size = max(size * avail / width, 4.0)
+        raw = text.encode("cp1252")
+        esc = (raw.replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)")
+               .replace(b"\r", b"\\r").replace(b"\n", b"\\n"))
+        tj = list(re.finditer(rb"\((?:\\.|[^\\)])*\)\s*Tj", stream))
+        done = bool(tj)
+        # el aspecto puede trocear el texto en varios Tj/Td: se sustituye todo el tramo por uno solo
+        new = (stream[:tj[0].start()] + b"(" + esc + b") Tj" + stream[tj[-1].end():]) if tj else stream
+        tfs = list(re.finditer(rb"/(\S+)\s+([\d.]+)\s+Tf", new))
+        if tfs and size != span.size:
+            m = tfs[-1]
+            new = new[:m.start(2)] + (f"{size:.4f}").encode() + new[m.end(2):]
+        if not done:                                # estructura inesperada: regenerar
+            for w in self.doc[span.page].widgets():
+                if w.xref == x:
+                    w.field_value = text
+                    w.update()
+            return
+        doc.update_stream(n, new)
+        doc.xref_set_key(x, "V", pymupdf.get_pdf_str(text))
+        kp, pv = doc.xref_get_key(x, "Parent")
+        if kp == "xref" and doc.xref_get_key(int(pv.split()[0]), "V")[0] != "null":
+            doc.xref_set_key(int(pv.split()[0]), "V", pymupdf.get_pdf_str(text))
 
     @staticmethod
     def _native_run(ops, inv, pos, run, fc, span):

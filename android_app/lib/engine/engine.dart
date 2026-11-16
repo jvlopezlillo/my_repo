@@ -4,6 +4,7 @@ import 'content.dart';
 import 'document.dart';
 import 'fonts.dart';
 import 'objects.dart';
+import 'std_widths.dart';
 import 'writer.dart';
 
 class SpanInfo {
@@ -17,8 +18,10 @@ class SpanInfo {
   final bool bold, italic, horizontal;
   final List<double> color; // 0..1
   final String source; // texto explicativo de la fuente
+  final int fieldNum; // >0: campo de formulario (nº de objeto del widget)
   const SpanInfo(this.page, this.runIndex, this.text, this.x0, this.y0, this.x1, this.y1,
-      this.fontName, this.size, this.bold, this.italic, this.horizontal, this.color, this.source);
+      this.fontName, this.size, this.bold, this.italic, this.horizontal, this.color, this.source,
+      [this.fieldNum = 0]);
 
   String get styleLabel {
     final s = [if (bold) 'Negrita', if (italic) 'Cursiva'];
@@ -114,10 +117,168 @@ class PdfTextEngine {
         r.font.embedded ? 'incrustada en el PDF (se reutiliza la misma)' : 'fuente del PDF (no incrustada)',
       ));
     }
+    final fields = _fieldSpans(page);
+    if (fields.isEmpty) return out;
+    out.removeWhere((sp) {
+      final cx = (sp.x0 + sp.x1) / 2, cy = (sp.y0 + sp.y1) / 2;
+      return fields.any((f) => cx >= f.x0 && cx <= f.x1 && cy >= f.y0 && cy <= f.y1);
+    });
+    return [...out, ...fields];
+  }
+
+  // ---------------------------------------------------------------- formularios
+  Map<String, dynamic>? _acroFormDr() {
+    final root = doc.dictOf(doc.trailer['Root']);
+    final af = doc.dictOf(root?['AcroForm']);
+    return doc.dictOf(af?['DR']);
+  }
+
+  /// Campos de texto de una línea con valor.
+  List<SpanInfo> _fieldSpans(int page) {
+    final p = _pages[page];
+    final annots = doc.resolve(p.dict['Annots']);
+    if (annots is! List) return [];
+    final b = p.box;
+    final out = <SpanInfo>[];
+    for (final a in annots) {
+      if (a is! PdfRef) continue;
+      final d = doc.dictOf(a);
+      if (d == null || doc.resolve(d['Subtype']) != const PdfName('Widget')) continue;
+      final inh = _inheritedField(d);
+      if ((doc.resolve(inh['FT']) as PdfName?)?.name != 'Tx') continue;
+      final ff = (doc.resolve(inh['Ff']) as num?)?.toInt() ?? 0;
+      if (ff & (1 << 12) != 0 || ff & (1 << 24) != 0) continue; // multilínea / comb
+      final v = _pdfTextString(doc.resolve(inh['V']));
+      if (v == null || v.isEmpty) continue;
+      final ap = doc.resolve(doc.dictOf(d['AP'])?['N']);
+      if (ap is! PdfStream) continue;
+      final info = _apInfo(ap);
+      if (info == null) continue;
+      final r = (doc.resolve(d['Rect']) as List).map((e) => (doc.resolve(e) as num).toDouble()).toList();
+      final x0 = r[0] < r[2] ? r[0] : r[2], x1 = r[0] < r[2] ? r[2] : r[0];
+      final y0 = r[1] < r[3] ? r[1] : r[3], y1 = r[1] < r[3] ? r[3] : r[1];
+      final n = info.name.toLowerCase();
+      out.add(SpanInfo(
+        page, -1, v, x0 - b[0], b[3] - y1, x1 - b[0], b[3] - y0, info.name, info.size,
+        n.contains('bold') || n.endsWith('bo') || n.contains('bd'),
+        n.contains('ital') || n.contains('obli') || n.endsWith('it') || n.endsWith('ob'),
+        true, info.color, 'campo de formulario (se conserva su fuente y tamaño)', a.num));
+    }
     return out;
   }
 
+  Map<String, dynamic> _inheritedField(Map<String, dynamic> d) {
+    final m = <String, dynamic>{};
+    var cur = d;
+    int guard = 0;
+    while (guard++ < 8) {
+      for (final k in ['FT', 'Ff', 'V']) {
+        if (cur[k] != null) m.putIfAbsent(k, () => cur[k]);
+      }
+      final par = doc.dictOf(cur['Parent']);
+      if (par == null) break;
+      cur = par;
+    }
+    return m;
+  }
+
+  static String? _pdfTextString(dynamic v) {
+    if (v is! PdfString) return null;
+    final b = v.bytes;
+    if (b.length >= 2 && b[0] == 0xFE && b[1] == 0xFF) {
+      final u = <int>[];
+      for (int i = 2; i + 1 < b.length; i += 2) {
+        u.add((b[i] << 8) | b[i + 1]);
+      }
+      return String.fromCharCodes(u);
+    }
+    return String.fromCharCodes(b.map((c) => c >= 0x80 && c <= 0x9F ? (winAnsiChar(c).codeUnitAt(0)) : c));
+  }
+
+  ({String name, double size, List<double> color})? _apInfo(PdfStream ap) {
+    final data = latin1.decode(doc.decodeStream(ap));
+    final tfs = RegExp(r'/(\S+)\s+([\d.]+)\s+Tf').allMatches(data).toList();
+    if (tfs.isEmpty) return null;
+    var name = tfs.last.group(1)!;
+    final size = double.parse(tfs.last.group(2)!);
+    final dr = _acroFormDr();
+    final f = doc.dictOf(doc.dictOf(dr?['Font'])?[name]);
+    final bf = f == null ? null : doc.resolve(f['BaseFont']);
+    if (bf is PdfName) name = bf.name;
+    final m = RegExp(r'([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg').firstMatch(data);
+    final col = m == null ? [0.0, 0.0, 0.0] : [for (int i = 1; i <= 3; i++) double.parse(m.group(i)!)];
+    return (name: name, size: size, color: col);
+  }
+
+  static double _stdTextWidth(String text, bool bold, bool serif, bool mono, double size) {
+    if (mono) return text.length * 0.6 * size;
+    final t = stdWidths[serif ? (bold ? 'tibo' : 'tiro') : (bold ? 'hebo' : 'helv')]!;
+    double w = 0;
+    for (final r in text.runes) {
+      final c = winAnsiCode(String.fromCharCode(r));
+      w += (c != null && c >= 32 && c < 256) ? t[c - 32] : 500;
+    }
+    return w * size / 1000;
+  }
+
+  Uint8List _applyField(EditCheck chk) {
+    final s = chk.span;
+    final ref = PdfRef(s.fieldNum, doc.genOf(s.fieldNum));
+    final w = doc.dictOf(ref)!;
+    final ap = doc.resolve(doc.dictOf(w['AP'])!['N']) as PdfStream;
+    final apRef = (doc.dictOf(w['AP'])!['N']) as PdfRef;
+    var data = latin1.decode(doc.decodeStream(ap));
+    // anchura disponible (BBox) y tamaño: solo se reduce si el texto no cabe
+    final bbox = doc.resolve(ap.dict['BBox']);
+    final bw = bbox is List ? (doc.resolve(bbox[2]) as num).toDouble() - (doc.resolve(bbox[0]) as num).toDouble() : 1e9;
+    final n = s.fontName.toLowerCase();
+    final serif = n.contains('times') || n.startsWith('ti');
+    final mono = n.contains('cour') || n.startsWith('co');
+    var size = s.size;
+    final width = _stdTextWidth(chk.newText, s.bold, serif, mono, size);
+    final avail = bw - 4;
+    if (width > avail && avail > 0) size = (size * avail / width).clamp(4.0, size);
+    final esc = StringBuffer();
+    for (final r in chk.newText.runes) {
+      final c = winAnsiCode(String.fromCharCode(r))!;
+      if (c == 0x28 || c == 0x29 || c == 0x5C) {
+        esc.write('\\${String.fromCharCode(c)}');
+      } else if (c < 32 || c > 126) {
+        esc.write('\\${c.toRadixString(8).padLeft(3, '0')}');
+      } else {
+        esc.write(String.fromCharCode(c));
+      }
+    }
+    final tj = RegExp(r'\((?:\\.|[^\\)])*\)\s*Tj').allMatches(data).toList();
+    if (tj.isEmpty) throw PdfEditException('El campo tiene una estructura no soportada.');
+    data = data.substring(0, tj.first.start) + '($esc) Tj' + data.substring(tj.last.end);
+    if (size != s.size) {
+      final tfs = RegExp(r'/(\S+)\s+([\d.]+)\s+Tf').allMatches(data).toList();
+      final m = tfs.last;
+      data = data.substring(0, m.start) + '/${m.group(1)} ${_numStr(size)} Tf' + data.substring(m.end);
+    }
+    final value = PdfString(Uint8List.fromList([0xFE, 0xFF, for (final u in chk.newText.codeUnits) ...[u >> 8, u & 255]]));
+    final objs = <int, dynamic>{
+      apRef.num: makeStream(ap.dict, Uint8List.fromList(latin1.encode(data))),
+      ref.num: {...w, 'V': value},
+    };
+    final par = w['Parent'];
+    if (par is PdfRef) {
+      final pd = doc.dictOf(par);
+      if (pd != null && pd['V'] != null) objs[par.num] = {...pd, 'V': value};
+    }
+    return appendRevision(doc, objs);
+  }
+
   EditCheck check(SpanInfo s, String newText) {
+    if (s.fieldNum > 0) {
+      final bad = <String>{};
+      for (final r in newText.runes) {
+        final ch = String.fromCharCode(r);
+        if (ch.trim().isNotEmpty && winAnsiCode(ch) == null) bad.add(ch);
+      }
+      return EditCheck(s, newText, bad.toList()..sort(), bad.toList()..sort());
+    }
     final run = _data(s.page).runs[s.runIndex];
     final missing = <String>{};
     final unsupported = <String>{};
@@ -141,6 +302,12 @@ class PdfTextEngine {
 
   /// Devuelve los bytes del PDF con el texto reemplazado (como nueva revisión incremental).
   Uint8List apply(EditCheck chk, {bool allowEquivalent = false}) {
+    if (chk.span.fieldNum > 0) {
+      if (!chk.ok) {
+        throw PdfEditException('Un campo de formulario solo admite caracteres Latin-1: ${chk.missing.join(' ')}');
+      }
+      return _applyField(chk);
+    }
     if (!chk.ok && !allowEquivalent) {
       throw PdfEditException('Faltan caracteres en la fuente original: ${chk.missing.join(' ')}');
     }

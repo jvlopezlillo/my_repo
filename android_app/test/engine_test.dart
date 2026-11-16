@@ -72,6 +72,37 @@ void main() {
     File('/tmp/dart_objstm.pdf').writeAsBytesSync(out);
   });
 
+  test('campo de formulario: cambia valor y aspecto', () {
+    final e = PdfTextEngine(File('test/fixtures/form.pdf').readAsBytesSync());
+    final s = e.spans(0).firstWhere((x) => x.fieldNum > 0);
+    expect(s.text, 'VICENTE');
+    expect(s.size, closeTo(14, 0.5));
+    final c = e.check(s, 'GONZALO ÑANDÚ');
+    expect(c.ok, isTrue);
+    final out = e.apply(c);
+    File('/tmp/dart_form.pdf').writeAsBytesSync(out);
+    final e2 = PdfTextEngine(out);
+    final texts = e2.spans(0).map((x) => x.text).toList();
+    expect(texts, ['GONZALO ÑANDÚ']);
+    expect(e2.check(e2.spans(0).first, '日本').ok, isFalse);
+  });
+
+  final form = Platform.environment['FORM'];
+  test('formulario real (matrícula)', () {
+    var e = PdfTextEngine(File(form!).readAsBytesSync());
+    final fields = e.spans(0).where((x) => x.fieldNum > 0).toList();
+    expect(fields.length, greaterThan(10));
+    var s = fields.firstWhere((x) => x.text == 'VICENTE');
+    var out = e.apply(e.check(s, 'GONZALO ÑANDÚ'));
+    e = PdfTextEngine(out);
+    s = e.spans(0).firstWhere((x) => x.text.startsWith('JOSÉ'));
+    out = e.apply(e.check(s, 'JOSÉ MARÍA'));
+    File('/tmp/dart_form_real.pdf').writeAsBytesSync(out);
+    final texts = PdfTextEngine(out).spans(0).map((x) => x.text).toList();
+    expect(texts, containsAll(['GONZALO ÑANDÚ', 'JOSÉ MARÍA']));
+    expect(texts, isNot(contains('VICENTE')));
+  }, skip: form == null);
+
   final inv = Platform.environment['INVOICE'];
   test('factura real con fuente CID/CFF', () {
     final e = PdfTextEngine(File(inv!).readAsBytesSync());

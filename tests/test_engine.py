@@ -82,3 +82,24 @@ def test_save_roundtrip():
     e.apply_edit(e.check_edit(s, "Changed"))
     out = os.path.join(d, "o.pdf"); e.save(out)
     assert "Changed" in pymupdf.open(out)[0].get_text()
+
+
+def test_form_field_edit():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "f.pdf")
+    doc = pymupdf.open(); page = doc.new_page()
+    w = pymupdf.Widget(); w.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+    w.field_name = "nombre"; w.field_value = "VICENTE"; w.rect = pymupdf.Rect(50, 50, 250, 80)
+    w.text_font = "Helv"; w.text_fontsize = 14
+    page.add_widget(w); doc.save(p)
+    e = PdfEditor(); e.open(p)
+    s = next(x for x in e.spans(0) if x.field_xref)
+    assert s.text == "VICENTE" and abs(s.size - 14) < 0.5
+    c = e.check_edit(s, "GONZALO ÑANDÚ"); assert c.ok
+    e.apply_edit(c)
+    out = os.path.join(d, "o.pdf"); e.save(out)
+    r = pymupdf.open(out)[0]
+    assert [w.field_value for w in r.widgets()] == ["GONZALO ÑANDÚ"]
+    assert "VICENTE" not in r.get_text()
+    # carácter fuera de WinAnsi: se bloquea
+    assert not e.check_edit(next(x for x in e.spans(0) if x.field_xref), "日本").ok
