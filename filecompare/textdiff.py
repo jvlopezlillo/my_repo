@@ -83,6 +83,11 @@ def normalize_line(s: str) -> str:
     return " ".join(s.split())
 
 
+def is_comment_line(s: str) -> bool:
+    """Línea cuyo primer contenido (tras la indentación) es «//»."""
+    return s.lstrip().startswith("//")
+
+
 # --- alineación -------------------------------------------------------------------------------
 SIM_THRESHOLD = 0.5  # parecido mínimo para emparejar dos líneas distintas
 BLANK_SCORE = 0.02  # emparejar dos líneas en blanco apenas puntúa: nunca debe pesar más que una línea real
@@ -160,8 +165,40 @@ def _align_gap(a, b, ka, kb, i1, i2, j1, j2, out: list) -> None:
         pi, pj = pa + 1, pb + 1
 
 
+def _merge_ignored(a, b, ia_map, ib_map, raw) -> list:
+    """Reinserta las líneas ignoradas (comentarios) entre las filas ya alineadas.
+
+    Las ignoradas de un lado se colocan frente a las del otro lado que caigan en el mismo hueco;
+    ninguna cuenta como diferencia (tipo "ign").
+    """
+    out: list = []
+    pa = pb = 0  # primera línea original de cada lado que aún no se ha emitido
+    ci = cj = 0  # líneas "filtradas" consumidas
+
+    def flush(upto_a: int, upto_b: int):
+        nonlocal pa, pb
+        la, lb = range(pa, upto_a), range(pb, upto_b)
+        for k in range(max(len(la), len(lb))):
+            out.append((a[la[k]] if k < len(la) else None, b[lb[k]] if k < len(lb) else None, "ign"))
+        pa, pb = max(pa, upto_a), max(pb, upto_b)
+
+    for lt, rt, equal in raw:
+        ua = ia_map[ci] if lt is not None else None
+        ub = ib_map[cj] if rt is not None else None
+        flush(ua if ua is not None else pa, ub if ub is not None else pb)
+        out.append((lt, rt, "eq" if equal else "diff"))
+        if lt is not None:
+            ci += 1
+            pa = ua + 1
+        if rt is not None:
+            cj += 1
+            pb = ub + 1
+    flush(len(a), len(b))
+    return out
+
+
 def compute_diff(
-    a: list[str], b: list[str], ignore_ws: bool = False
+    a: list[str], b: list[str], ignore_ws: bool = False, ignore_comments: bool = False
 ) -> tuple[list[Row], list[Block]]:
     """Devuelve filas alineadas lado a lado y la lista de bloques distintos.
 
@@ -170,7 +207,15 @@ def compute_diff(
     2. Entre anclas, las líneas se emparejan por parecido (conservando el orden); lo que no se
        parece a nada queda como sólo-izquierda o sólo-derecha.
     Con `ignore_ws`, las líneas que sólo difieren en espacios en blanco se consideran iguales.
+    Con `ignore_comments`, las líneas que empiezan por «//» se ignoran en ambos lados: se siguen
+    mostrando, pero no cuentan como diferencia ni influyen en el alineamiento.
     """
+    full_a, full_b = a, b
+    ia_map = ib_map = None
+    if ignore_comments:
+        ia_map = [i for i, x in enumerate(a) if not is_comment_line(x)]
+        ib_map = [j for j, x in enumerate(b) if not is_comment_line(x)]
+        a, b = [a[i] for i in ia_map], [b[j] for j in ib_map]
     ka = [normalize_line(x) for x in a] if ignore_ws else list(a)
     kb = [normalize_line(x) for x in b] if ignore_ws else list(b)
     nb_a = [i for i, k in enumerate(ka) if k.strip()]
@@ -189,6 +234,11 @@ def compute_diff(
             raw.append((a[ai], b[bj], True))
         pi, pj = ai + 1, bj + 1
 
+    if ignore_comments:
+        items = _merge_ignored(full_a, full_b, ia_map, ib_map, raw)
+    else:
+        items = [(lt, rt, "eq" if equal else "diff") for lt, rt, equal in raw]
+
     rows: list[Row] = []
     blocks: list[Block] = []
     i = j = 0
@@ -202,12 +252,12 @@ def compute_diff(
             blocks.append(Block(len(blocks), tag, i1, i, j1, j, start, count))
             cur = None
 
-    for lt, rt, equal in raw:
-        if equal:
+    for lt, rt, kind in items:
+        if kind != "diff":  # iguales o ignoradas: no pertenecen a ningún bloque
             close()
             rows.append(Row(lt, rt, None))
-            i += 1
-            j += 1
+            i += lt is not None
+            j += rt is not None
             continue
         if cur is None:
             cur = [len(rows), i, j, 0]

@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.welcome = QLabel(
             "<h2>FileCompare</h2><p>Archivo → Comparar carpetas (Ctrl+D)<br>"
-            "Archivo → Comparar ficheros (Ctrl+F)</p>")
+            "Archivo → Comparar ficheros (Ctrl+Mayús+F)</p>")
         self.welcome.setAlignment(Qt.AlignCenter)
         central = QWidget()
         lay = QVBoxLayout(central)
@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
         menu = self.menuBar().addMenu("&Archivo")
         for text, key, slot in (
             ("Comparar &carpetas…", "Ctrl+D", lambda: self.open_folders()),
-            ("Comparar &ficheros…", "Ctrl+F", self.pick_files),
+            ("Comparar &ficheros…", "Ctrl+Shift+F", self.pick_files),  # Ctrl+F es «Buscar» en la comparación de texto
             ("&Salir", QKeySequence.Quit, self.close),
         ):
             a = QAction(text, self)
@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
         if b:
             self.open_text(Path(a), Path(b))
 
-    def open_text(self, left: Path, right: Path, ignore_ws: bool = True):
+    def open_text(self, left: Path, right: Path, ignore_ws: bool = True, ignore_comments: bool = True):
         left, right = Path(left), Path(right)
         for i in range(self.tabs.count()):
             w = self.tabs.widget(i)
@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.critical(self, "Error al leer", str(e))
             return
-        view = TextDiffView(ldoc, rdoc, ignore_ws)
+        view = TextDiffView(ldoc, rdoc, ignore_ws, ignore_comments)
         name = left.name if left.name == right.name else f"{left.name} ↔ {right.name}"
         i = self._add_tab(view, name, f"{left}\n{right}")
         view.dirtyChanged.connect(lambda d, v=view, n=name: self._mark(v, n, d))

@@ -333,3 +333,63 @@ def test_diff_is_fast_on_large_inputs():
     t = time.perf_counter()
     compute_diff([f"a{i} x" for i in range(1500)], [f"b{i} y" for i in range(1500)])
     assert time.perf_counter() - t < 5
+
+
+def test_ignore_comments_in_diff():
+    # un comentario sólo en un lado no es diferencia, pero se sigue mostrando
+    rows, blocks = compute_diff(["x", "// c1", "y"], ["x", "y"], ignore_comments=True)
+    assert blocks == []
+    assert [(r.left, r.right) for r in rows] == [("x", "x"), ("// c1", None), ("y", "y")]
+    assert [r.block for r in rows] == [None, None, None]
+    # sin la opción sí lo es
+    _, blocks = compute_diff(["x", "// c1", "y"], ["x", "y"])
+    assert len(blocks) == 1 and blocks[0].tag == "delete"
+    # comentarios distintos en el mismo sitio: tampoco; y se muestran en la misma fila
+    rows, blocks = compute_diff(["x", "// a", "y"], ["x", "  // b", "y"], ignore_comments=True)
+    assert blocks == [] and (rows[1].left, rows[1].right) == ("// a", "  // b")
+    # una línea real distinta junto a un comentario sí cuenta, y el comentario no entra en el bloque
+    rows, blocks = compute_diff(["x", "// c", "y"], ["x", "z"], ignore_comments=True)
+    assert len(blocks) == 1 and (blocks[0].i1, blocks[0].i2, blocks[0].j1, blocks[0].j2) == (2, 3, 1, 2)
+    # un «//» que no está al inicio de la línea no es un comentario ignorado
+    _, blocks = compute_diff(["x // c"], ["x"], ignore_comments=True)
+    assert len(blocks) == 1
+
+
+def test_ignore_comments_blocks_stay_consistent():
+    import random
+    rnd = random.Random(7)
+    pool = ["x", "y y", "", "foo bar", "}", "// c", "  // d", "// foo bar"]
+    for _ in range(300):
+        a = [rnd.choice(pool) for _ in range(rnd.randint(0, 12))]
+        b = [rnd.choice(pool) for _ in range(rnd.randint(0, 12))]
+        for ws in (False, True):
+            rows, blocks = compute_diff(a, b, ws, ignore_comments=True)
+            assert [r.left for r in rows if r.left is not None] == a
+            assert [r.right for r in rows if r.right is not None] == b
+            for blk in blocks:
+                seg = rows[blk.row_start:blk.row_start + blk.row_count]
+                assert all(r.block == blk.index for r in seg)
+                assert [r.left for r in seg if r.left is not None] == a[blk.i1:blk.i2]
+                assert [r.right for r in seg if r.right is not None] == b[blk.j1:blk.j2]
+                assert not any(x.lstrip().startswith("//") for x in a[blk.i1:blk.i2] + b[blk.j1:blk.j2])
+            # sin líneas de código distintas no hay bloques
+            code_a = [x for x in a if not x.lstrip().startswith("//")]
+            code_b = [x for x in b if not x.lstrip().startswith("//")]
+            if not ws and code_a == code_b:
+                assert blocks == []
+
+
+def test_ignore_comments_in_files(tmp_path):
+    a, b = tmp_path / "a.js", tmp_path / "b.js"
+    a.write_bytes(b"x = 1;\r\n// nota\r\n  // otra\r\ny = 2; // se queda\r\n")
+    b.write_bytes(b"x = 1;\ny = 2; // se queda\n")
+    assert not files_equal(a, b)
+    assert not files_equal(a, b, ignore_ws=True, ignore_eol=True)  # los comentarios sí cuentan
+    assert files_equal(a, b, ignore_comments=True)
+    b.write_bytes(b"x = 1;\ny = 3; // se queda\n")
+    assert not files_equal(a, b, ignore_comments=True)
+    # carpetas
+    w(tmp_path / "L/f.js", "a\n// c\nb\n")
+    w(tmp_path / "R/f.js", "a\nb\n")
+    assert by_rel(compare_dirs(tmp_path / "L", tmp_path / "R"))["f.js"].status is Status.DIFFERENT
+    assert by_rel(compare_dirs(tmp_path / "L", tmp_path / "R", ignore_comments=True))["f.js"].status is Status.IDENTICAL

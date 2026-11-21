@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import (QColor, QFont, QFontDatabase, QKeySequence, QPainter, QPen,
+from PySide6.QtGui import (QColor, QFont, QFontDatabase, QKeySequence, QPainter, QPen, QShortcut,
                            QTextCursor, QTextFormat)
-from PySide6.QtWidgets import (QCheckBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox,
-                               QPlainTextEdit, QPushButton, QSizePolicy, QTextEdit,
+from PySide6.QtWidgets import (QCheckBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QSizePolicy, QTextEdit, QToolButton,
                                QVBoxLayout, QWidget)
 
 from .ruler import GREEN, ORANGE, OverviewRuler
-from .textdiff import TextDocument, apply_block, compute_diff, inline_spans
+from .textdiff import TextDocument, apply_block, compute_diff, inline_spans, is_comment_line
 
 # naranja = distinto; verde = líneas o bloques que sólo están en un lado (nuevos)
 COLORS = {
@@ -21,6 +22,9 @@ COLORS = {
     "insert": QColor(70, 175, 95),
 }
 FILLER = QColor(128, 128, 128)
+FIND_ALL = QColor(70, 130, 255)  # coincidencias de la búsqueda
+FIND_CURRENT = QColor(255, 210, 0)  # la coincidencia actual
+MAX_MATCHES = 5000
 BTN_W = 22
 SIDES = ("left", "right")
 
@@ -140,13 +144,16 @@ class TextDiffView(QWidget):
     dirtyChanged = Signal(bool)
     saved = Signal()
 
-    def __init__(self, left: TextDocument, right: TextDocument, ignore_ws: bool = True, parent=None):
+    def __init__(self, left: TextDocument, right: TextDocument, ignore_ws: bool = True,
+                 ignore_comments: bool = True, parent=None):
         super().__init__(parent)
         self.left_doc, self.right_doc = left, right
         self.saved_lines = {"left": list(left.lines), "right": list(right.lines)}
         self.undo_stack: list[tuple[list[str], list[str]]] = []
         self.redo_stack: list[tuple[list[str], list[str]]] = []
         self.rows, self.blocks = [], []
+        self._find_matches: list[tuple[int, int, int, int]] = []  # (fila, lado 0/1, columna, longitud) en UTF-16
+        self._find_idx = -1
         self.current = -1
         self._dirty = False
         self._rebuilding = False
@@ -192,6 +199,11 @@ class TextDiffView(QWidget):
         self.chk_ws.setChecked(ignore_ws)
         self.chk_ws.setToolTip("Las líneas que sólo difieren en espacios o tabuladores se consideran iguales")
         self.chk_ws.toggled.connect(lambda _: (self.flush(), self.rebuild()))
+        self.chk_cmt = QCheckBox("Ignorar comentarios //")
+        self.chk_cmt.setChecked(ignore_comments)
+        self.chk_cmt.setToolTip("Las líneas que empiezan por // (tras la indentación) se ignoran en ambos lados: "
+                                "se muestran en gris y no cuentan como diferencia")
+        self.chk_cmt.toggled.connect(lambda _: (self.flush(), self.rebuild()))
         self.btn_save_l = QPushButton("Guardar izquierda (Ctrl+1)")
         self.btn_save_r = QPushButton("Guardar derecha (Ctrl+2)")
         self.btn_save_l.setShortcut("Ctrl+1")
@@ -215,6 +227,7 @@ class TextDiffView(QWidget):
         for b in (self.btn_prev, self.btn_next, self.btn_undo, self.btn_redo):
             bar.addWidget(b)
         bar.addWidget(self.chk_ws)
+        bar.addWidget(self.chk_cmt)
         bar.addWidget(self.info, 1)
         bar.addWidget(self.btn_save_l)
         bar.addWidget(self.btn_save_r)
@@ -234,7 +247,9 @@ class TextDiffView(QWidget):
         grid.setRowStretch(1, 1)
 
         lay = QVBoxLayout(self)
+        self._build_find_bar()
         lay.addLayout(bar)
+        lay.addWidget(self.find_bar)
         lay.addLayout(grid, 1)
         self.rebuild()
 
@@ -246,6 +261,10 @@ class TextDiffView(QWidget):
     @property
     def ignore_ws(self) -> bool:
         return self.chk_ws.isChecked()
+
+    @property
+    def ignore_comments(self) -> bool:
+        return self.chk_cmt.isChecked()
 
     def _doc(self, side: str) -> TextDocument:
         return self.left_doc if side == "left" else self.right_doc
@@ -331,7 +350,8 @@ class TextDiffView(QWidget):
         try:
             lv = self.left_edit.verticalScrollBar().value()
             lh = self.left_edit.horizontalScrollBar().value()
-            self.rows, self.blocks = compute_diff(self.left_doc.lines, self.right_doc.lines, self.ignore_ws)
+            self.rows, self.blocks = compute_diff(self.left_doc.lines, self.right_doc.lines, self.ignore_ws,
+                                                 self.ignore_comments)
             if self.current >= len(self.blocks):
                 self.current = len(self.blocks) - 1
             self.left_edit.setPlainText("\n".join(r.left or "" for r in self.rows))
@@ -340,6 +360,7 @@ class TextDiffView(QWidget):
             self.filler["right"] = [r.right is None for r in self.rows] or [True]
             for s in SIDES:
                 self._recompute_nums(s)
+            self._find_update_matches()
             self._highlight()
             self.left_edit.verticalScrollBar().setValue(lv)
             self.right_edit.verticalScrollBar().setValue(lv)
@@ -418,8 +439,203 @@ class TextDiffView(QWidget):
                         start = edit.document().findBlockByNumber(n).position()
                         for a, b in ss:
                             spans[side].append(mk(edit, start + a, b - a, _alpha(COLORS["replace"], 190), False))
+        # filas de relleno que no pertenecen a un bloque (hueco frente a un comentario ignorado)
+        # y comentarios ignorados en gris
+        muted = {"left": [], "right": []}
+        for n, row in enumerate(self.rows):
+            for side, text in (("left", row.left), ("right", row.right)):
+                edit = self.edits[side]
+                if text is None:
+                    if row.block is None:
+                        start = edit.document().findBlockByNumber(n).position()
+                        sels[side].append(mk(edit, start, 0, _alpha(FILLER, 40), True))
+                elif self.ignore_comments and is_comment_line(text):
+                    start = edit.document().findBlockByNumber(n).position()
+                    sel = mk(edit, start, 0, QColor(0, 0, 0, 0), True)
+                    sel.format.setForeground(QColor(120, 120, 120))
+                    muted[side].append(sel)
         for side in SIDES:
-            self.edits[side].setExtraSelections(sels[side] + spans[side])
+            self.edits[side].setExtraSelections(
+                sels[side] + muted[side] + spans[side] + self._find_selections(side))
+
+    # ---- búsqueda (Ctrl+F) ------------------------------------------------------------
+    def _build_find_bar(self):
+        self.find_bar = QWidget()
+        fb = QHBoxLayout(self.find_bar)
+        fb.setContentsMargins(0, 0, 0, 0)
+        self.find_edit = QLineEdit()
+        self.find_edit.setPlaceholderText("Buscar en ambos lados…")
+        self.find_edit.setClearButtonEnabled(True)
+        self.chk_case = QCheckBox("Distinguir mayúsculas")
+        self.find_label = QLabel()
+        self.btn_fprev, self.btn_fnext, btn_close = QToolButton(), QToolButton(), QToolButton()
+        for b, text, tip in ((self.btn_fprev, "▲", "Coincidencia anterior (Mayús+F3 / Mayús+Intro)"),
+                             (self.btn_fnext, "▼", "Coincidencia siguiente (F3 / Intro)"),
+                             (btn_close, "✕", "Cerrar la búsqueda (Esc)")):
+            b.setText(text)
+            b.setToolTip(tip)
+        fb.addWidget(QLabel("Buscar:"))
+        fb.addWidget(self.find_edit, 1)
+        for w in (self.btn_fprev, self.btn_fnext, self.chk_case, self.find_label, btn_close):
+            fb.addWidget(w)
+        self.find_bar.hide()
+
+        self.find_edit.textChanged.connect(self._find_text_changed)
+        self.chk_case.toggled.connect(self._find_text_changed)
+        self.find_edit.returnPressed.connect(lambda: self.find_step(1))
+        self.btn_fnext.clicked.connect(lambda: self.find_step(1))
+        self.btn_fprev.clicked.connect(lambda: self.find_step(-1))
+        btn_close.clicked.connect(self.hide_find)
+
+        def shortcut(keys: str, widget, slot, context=Qt.WidgetWithChildrenShortcut):
+            sc = QShortcut(QKeySequence(keys), widget)
+            sc.setContext(context)
+            sc.activated.connect(slot)
+            return sc
+
+        shortcut("Ctrl+F", self, self.show_find)  # sólo en la pestaña visible
+        shortcut("F3", self, lambda: self.find_step(1))
+        shortcut("Shift+F3", self, lambda: self.find_step(-1))
+        shortcut("Shift+Return", self.find_edit, lambda: self.find_step(-1), Qt.WidgetShortcut)
+        shortcut("Escape", self.find_bar, self.hide_find)
+
+    def _cursor_key(self) -> tuple[int, int, int]:
+        """(fila, lado, columna) del cursor del panel con foco (o del izquierdo)."""
+        edit = self._focused_edit()
+        c = edit.textCursor()
+        pos = min(c.position(), c.anchor())
+        blk = edit.document().findBlock(pos)
+        return blk.blockNumber(), SIDES.index("left" if edit is self.left_edit else "right"), pos - blk.position()
+
+    def show_find(self):
+        sel = self._focused_edit().textCursor().selectedText()
+        if sel and len(sel) < 200 and "\u2029" not in sel:
+            self.find_edit.setText(sel)  # parte del texto seleccionado
+        was_hidden = not self.find_bar.isVisible()
+        self.find_bar.show()
+        if was_hidden:
+            self._find_origin = self._cursor_key()
+        self.find_edit.setFocus()
+        self.find_edit.selectAll()
+        self._find_text_changed()
+
+    def hide_find(self):
+        if not self.find_bar.isVisible():
+            return
+        self.find_bar.hide()
+        self._find_matches, self._find_idx = [], -1
+        self._highlight()
+        self._focused_edit().setFocus()
+
+    @staticmethod
+    def _u16(text: str, index: int) -> int:
+        """Posición en unidades UTF-16 (como las de Qt) de un índice de cadena de Python."""
+        return len(text[:index].encode("utf-16-le")) // 2
+
+    def _find_update_matches(self):
+        """Recalcula las coincidencias en los dos paneles (tal como se ven ahora)."""
+        self._find_matches, self._find_idx = [], -1
+        q = self.find_edit.text() if self.find_bar.isVisible() else ""
+        if q:
+            pat = re.compile(re.escape(q), 0 if self.chk_case.isChecked() else re.IGNORECASE)
+            for side_i, side in enumerate(SIDES):
+                blk, row = self.edits[side].document().begin(), 0
+                while blk.isValid() and len(self._find_matches) < MAX_MATCHES:
+                    text = blk.text()
+                    for m in pat.finditer(text):
+                        start = self._u16(text, m.start())
+                        self._find_matches.append((row, side_i, start, self._u16(text, m.end()) - start))
+                    blk, row = blk.next(), row + 1
+            self._find_matches.sort(key=lambda m: (m[0], m[1], m[2]))
+        self._find_update_label()
+
+    def _find_update_label(self):
+        q, n = self.find_edit.text(), len(self._find_matches)
+        if not q:
+            self.find_label.setText("")
+        elif n == 0:
+            self.find_label.setText("Sin resultados")
+        else:
+            left = sum(1 for m in self._find_matches if m[1] == 0)
+            pos = f"{self._find_idx + 1} de " if self._find_idx >= 0 else ""
+            more = "+" if n >= MAX_MATCHES else ""
+            self.find_label.setText(f"{pos}{n}{more}  (izq. {left} · der. {n - left})")
+
+    def _find_text_changed(self, *_):
+        self._find_update_matches()
+        if self._find_matches:
+            origin = getattr(self, "_find_origin", (0, 0, 0))
+            self._select_match(next((i for i, m in enumerate(self._find_matches)
+                                     if (m[0], m[1], m[2]) >= origin), 0))  # búsqueda incremental desde donde se abrió
+        else:
+            self._highlight()
+
+    def find_step(self, step: int):
+        """Siguiente (1) o anterior (-1) coincidencia; con la barra cerrada, la abre."""
+        if not self.find_bar.isVisible() or not self.find_edit.text():
+            self.show_find()
+            return
+        self.flush()
+        if not self._find_matches:
+            self._find_update_matches()
+        n = len(self._find_matches)
+        if n == 0:
+            return
+        if self._find_idx < 0:  # aún sin coincidencia activa: desde el cursor
+            ref = self._cursor_key()
+            if step > 0:
+                idx = next((i for i, m in enumerate(self._find_matches) if (m[0], m[1], m[2]) >= ref), 0)
+            else:
+                idx = next((i for i in range(n - 1, -1, -1)
+                            if (self._find_matches[i][0], self._find_matches[i][1], self._find_matches[i][2]) < ref), n - 1)
+        else:
+            idx = (self._find_idx + step) % n  # al final vuelve al principio
+        self._select_match(idx)
+
+    def _select_match(self, idx: int):
+        """Selecciona la coincidencia `idx` en su panel y la deja a la vista en los dos."""
+        row, side_i, col, length = self._find_matches[idx]
+        self._find_idx = idx
+        edit = self.edits[SIDES[side_i]]
+        blk = edit.document().findBlockByNumber(row)
+        cur = QTextCursor(blk)
+        cur.setPosition(blk.position() + col)  # sólo el cursor: la coincidencia se marca con el resaltado
+        for e in (self.left_edit, self.right_edit):  # (una selección real taparía el resaltado y quedaría en el otro panel)
+            if e is not edit and e.textCursor().hasSelection():
+                c2 = e.textCursor()
+                c2.clearSelection()
+                e.setTextCursor(c2)
+        edit.setTextCursor(cur)
+        bar = self.left_edit.verticalScrollBar()
+        first = self.left_edit.firstVisibleBlock().blockNumber()
+        last = self.left_edit.cursorForPosition(QPoint(0, max(0, self.left_edit.viewport().height() - 1))).blockNumber()
+        if row <= first or row >= last:  # fuera de la vista: se coloca a un tercio desde arriba
+            bar.setValue(max(0, row - max(1, (last - first)) // 3))
+        edit.ensureCursorVisible()  # (y desplaza en horizontal si hace falta)
+        self._highlight()
+        self._repaint_side()
+        self._find_update_label()
+
+    def _find_selections(self, side: str) -> list:
+        out = []
+        if not self._find_matches:
+            return out
+        edit = self.edits[side]
+        side_i = SIDES.index(side)
+        for i, (row, si, col, length) in enumerate(self._find_matches):
+            if si != side_i:
+                continue
+            sel = QTextEdit.ExtraSelection()
+            current = i == self._find_idx
+            sel.format.setBackground(_alpha(FIND_CURRENT if current else FIND_ALL, 235 if current else 110))
+            if current:
+                sel.format.setForeground(QColor(0, 0, 0))
+            c = QTextCursor(edit.document().findBlockByNumber(row))
+            c.setPosition(c.position() + col)
+            c.setPosition(c.position() + length, QTextCursor.KeepAnchor)
+            sel.cursor = c
+            out.append(sel)
+        return out
 
     # ---- acciones -----------------------------------------------------------
     def copy_block(self, index: int, direction: str):

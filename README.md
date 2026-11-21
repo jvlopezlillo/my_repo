@@ -11,7 +11,7 @@ python main.py CARPETA_A CARPETA_B  # compara dos carpetas
 python main.py FICHERO_A FICHERO_B  # compara dos ficheros de texto
 ```
 
-También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)`.
+También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+Mayús+F)`.
 
 ### Comparación de carpetas
 - Recorre recursivamente ambas carpetas y compara el **contenido** byte a byte, en un hilo aparte
@@ -26,6 +26,7 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
 - Botones **✕** en cada lado eliminan el fichero o la carpeta de ese lado (siempre piden confirmación; es definitivo).
 - **Doble clic** en un fichero lo abre en una pestaña con los dos lados, izquierda y derecha.
 - Opciones (**activadas por defecto**): «Ignorar espacios» (espacios/tabuladores y fin de línea), «Ignorar fin de línea» (LF = CRLF),
+  «Ignorar comentarios //» (las líneas que empiezan por `//`, tras la indentación, se ignoran en ambos lados),
   «Sólo diferencias» y patrones a ignorar (por defecto `.git, __pycache__`).
 
 ### Comparación de texto
@@ -37,6 +38,12 @@ También: `Archivo → Comparar carpetas (Ctrl+D)` / `Comparar ficheros (Ctrl+F)
   queda como «sólo a un lado».
 - Al dejar de teclear se recalcula la comparación. En el canal central, cada bloque tiene flechas **→ / ←**
   para copiarlo en cualquier sentido.
+- **«Ignorar comentarios //»** (activada por defecto): las líneas que empiezan por `//` (tras la indentación) se
+  ignoran en ambos lados. Se siguen viendo, en gris, pero no cuentan como diferencia ni influyen en el alineamiento;
+  un `//` en medio de una línea de código no se ignora.
+- **Buscar (Ctrl+F)** en los dos paneles a la vez: resalta todas las coincidencias (la actual en amarillo), con
+  contador por lado. **F3 / Intro** siguiente, **Mayús+F3 / Mayús+Intro** anterior, **Esc** cierra. Opción de
+  distinguir mayúsculas. Si hay texto seleccionado, se usa como búsqueda inicial.
 - **F8 / Shift+F8** llevan el cursor y el foco a la siguiente / anterior diferencia (modificada, nueva o que sólo está
   en un lado), partiendo de donde estés; al llegar al final vuelve al principio.
 - **Regla de diferencias** a la derecha (también en la lista de carpetas): una marca por diferencia en su posición

@@ -127,7 +127,7 @@ class ActionDelegate(QStyledItemDelegate):
 
 
 class FolderView(QWidget):
-    openFiles = Signal(object, object, bool)  # ruta izq., ruta der. (pueden no existir), ignorar espacios
+    openFiles = Signal(object, object, bool, bool)  # ruta izq., ruta der. (pueden no existir), ignorar espacios, ignorar comentarios
 
     def __init__(self, left: str = "", right: str = "", parent=None):
         super().__init__(parent)
@@ -144,15 +144,17 @@ class FolderView(QWidget):
         self.ws_chk.setToolTip("Ignora diferencias de espacios en blanco y tabuladores (y fin de línea)")
         self.eol_chk = QCheckBox("Ignorar fin de línea")
         self.eol_chk.setToolTip("Trata LF y CRLF como iguales")
-        self.ws_chk.setChecked(True)  # activadas por defecto
-        self.eol_chk.setChecked(True)
+        self.cmt_chk = QCheckBox("Ignorar comentarios //")
+        self.cmt_chk.setToolTip("Ignora, en ambos lados, las líneas que empiezan por // (tras la indentación)")
+        for c in (self.ws_chk, self.eol_chk, self.cmt_chk):
+            c.setChecked(True)  # activadas por defecto
         self.only_diff = QCheckBox("Sólo diferencias")
         self.confirm = QCheckBox("Confirmar al sobrescribir")
         self.confirm.setChecked(True)
         self.summary = QLabel()
         self.go = QPushButton("Comparar")
         self.go.clicked.connect(self.compare)
-        for c in (self.ws_chk, self.eol_chk):
+        for c in (self.ws_chk, self.eol_chk, self.cmt_chk):
             c.toggled.connect(lambda _: self.root is not None and self.compare())
         for e in (self.left_edit, self.right_edit, self.ignore_edit):
             e.returnPressed.connect(self.compare)
@@ -176,11 +178,12 @@ class FolderView(QWidget):
         opts.addWidget(self.ignore_edit, 1)
         opts.addWidget(self.ws_chk)
         opts.addWidget(self.eol_chk)
+        opts.addWidget(self.cmt_chk)
         opts.addWidget(self.only_diff)
         opts.addWidget(self.confirm)
         opts.addWidget(self.go)
         self.controls = [self.left_edit, self.right_edit, self.ignore_edit, self.ws_chk,
-                         self.eol_chk, self.confirm, self.go]
+                         self.eol_chk, self.cmt_chk, self.confirm, self.go]
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(6)
@@ -319,23 +322,25 @@ class FolderView(QWidget):
                 return
         if self.root is not None:
             self._expanded = self._collect_expanded()
-        ignore, ws, eol = self._ignore(), self.ws_chk.isChecked(), self.eol_chk.isChecked()
-        self._start(lambda p: compare_dirs(left, right, ignore, ws, eol, p),
+        ignore, ws, eol, cmt = (self._ignore(), self.ws_chk.isChecked(), self.eol_chk.isChecked(),
+                                self.cmt_chk.isChecked())
+        self._start(lambda p: compare_dirs(left, right, ignore, ws, eol, p, ignore_comments=cmt),
                     self._on_compared, "Comparando…")
 
     def _refresh_job(self, rel: str):
         """Trabajo para el hilo: vuelve a comparar sólo `rel` (o todo si el árbol no lo permite)."""
         left, right = self._roots()
-        ignore, ws, eol = self._ignore(), self.ws_chk.isChecked(), self.eol_chk.isChecked()
+        ignore, ws, eol, cmt = (self._ignore(), self.ws_chk.isChecked(), self.eol_chk.isChecked(),
+                                self.cmt_chk.isChecked())
         root = self.root
 
         def job(p: Progress):
             try:
-                refresh_path(root, rel, left, right, ignore, ws, eol, p)
+                refresh_path(root, rel, left, right, ignore, ws, eol, p, ignore_comments=cmt)
                 return root
             except KeyError:
                 logger.warning("refresh_path no pudo ubicar %r; se compara todo", rel)
-                return compare_dirs(left, right, ignore, ws, eol, p)
+                return compare_dirs(left, right, ignore, ws, eol, p, ignore_comments=cmt)
 
         return job
 
@@ -545,4 +550,4 @@ class FolderView(QWidget):
             return
         left_root, right_root = self._roots()
         self.openFiles.emit(path_under(left_root, node.rel), path_under(right_root, node.rel),
-                            self.ws_chk.isChecked())
+                            self.ws_chk.isChecked(), self.cmt_chk.isChecked())

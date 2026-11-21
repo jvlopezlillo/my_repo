@@ -82,24 +82,31 @@ def _ignored(name: str, patterns: Sequence[str]) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in patterns)
 
 
-def normalize_bytes(data: bytes, ignore_ws: bool = False, ignore_eol: bool = False) -> bytes:
-    """Normaliza el contenido para compararlo ignorando espacios y/o fin de línea."""
-    if ignore_ws or ignore_eol:
+def normalize_bytes(
+    data: bytes, ignore_ws: bool = False, ignore_eol: bool = False, ignore_comments: bool = False
+) -> bytes:
+    """Normaliza el contenido para compararlo ignorando espacios, fin de línea y/o comentarios «//»."""
+    if ignore_ws or ignore_eol or ignore_comments:
         data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    if ignore_comments:
+        data = b"\n".join(ln for ln in data.split(b"\n") if not ln.lstrip().startswith(b"//"))
     if ignore_ws:
         data = b"\n".join(b" ".join(line.split()) for line in data.split(b"\n"))
     return data
 
 
-def files_equal(a: Path, b: Path, ignore_ws: bool = False, ignore_eol: bool = False) -> bool:
-    """Compara el contenido (sin caché). Opcionalmente ignora espacios y/o fin de línea."""
+def files_equal(
+    a: Path, b: Path, ignore_ws: bool = False, ignore_eol: bool = False, ignore_comments: bool = False
+) -> bool:
+    """Compara el contenido (sin caché). Opcionalmente ignora espacios, fin de línea y/o comentarios «//»."""
     try:
         sa, sb = a.stat().st_size, b.stat().st_size
-        if (ignore_ws or ignore_eol) and max(sa, sb) <= NORMALIZE_LIMIT:
+        if (ignore_ws or ignore_eol or ignore_comments) and max(sa, sb) <= NORMALIZE_LIMIT:
             da, db = a.read_bytes(), b.read_bytes()
             if b"\0" in da[:8192] or b"\0" in db[:8192]:  # binario: exacto
                 return da == db
-            return normalize_bytes(da, ignore_ws, ignore_eol) == normalize_bytes(db, ignore_ws, ignore_eol)
+            return (normalize_bytes(da, ignore_ws, ignore_eol, ignore_comments)
+                    == normalize_bytes(db, ignore_ws, ignore_eol, ignore_comments))
         if sa != sb:
             return False
         with open(a, "rb") as fa, open(b, "rb") as fb:
@@ -138,6 +145,7 @@ class _Ctx:
     ws: bool = False
     eol: bool = False
     progress: Optional[Progress] = None
+    comments: bool = False
 
     def tick(self, n: int = 1) -> None:
         if self.progress:
@@ -176,7 +184,8 @@ def _make_child(
             return _build_dir(lp, rp, crel, n, ctx)
         if not ldir and not rdir:
             ctx.check()
-            st = Status.IDENTICAL if files_equal(lp, rp, ctx.ws, ctx.eol) else Status.DIFFERENT
+            st = (Status.IDENTICAL if files_equal(lp, rp, ctx.ws, ctx.eol, ctx.comments)
+                  else Status.DIFFERENT)
             ctx.tick(2)
             return DiffNode(n, crel, lp, rp, "file", "file", st)
         ctx.tick(count_files(lp, ctx.ignore) + count_files(rp, ctx.ignore))
@@ -237,6 +246,7 @@ def compare_dirs(
     ignore_ws: bool = False,
     ignore_eol: bool = False,
     progress: Optional[Progress] = None,
+    ignore_comments: bool = False,
 ) -> DiffNode:
     """Compara recursivamente dos carpetas. Devuelve el nodo raíz.
 
@@ -246,7 +256,7 @@ def compare_dirs(
     left, right = Path(left), Path(right)
     if progress:
         progress.set_total(count_files(left, ignore, progress) + count_files(right, ignore, progress))
-    return _build_dir(left, right, "", "", _Ctx(ignore, ignore_ws, ignore_eol, progress))
+    return _build_dir(left, right, "", "", _Ctx(ignore, ignore_ws, ignore_eol, progress, ignore_comments))
 
 
 def iter_nodes(node: DiffNode) -> Iterator[DiffNode]:
@@ -347,6 +357,7 @@ def refresh_path(
     ignore_ws: bool = False,
     ignore_eol: bool = False,
     progress: Optional[Progress] = None,
+    ignore_comments: bool = False,
 ) -> None:
     """Vuelve a comparar sólo `rel` (y sus carpetas contenedoras) y actualiza el árbol en su sitio.
 
@@ -369,7 +380,7 @@ def refresh_path(
                                + count_files(r and r[0], ignore, progress)))
     parent.children = [c for c in parent.children if c.name != name]
     if l or r:
-        parent.children.append(_make_child(name, rel, l, r, _Ctx(ignore, ignore_ws, ignore_eol, progress)))
+        parent.children.append(_make_child(name, rel, l, r, _Ctx(ignore, ignore_ws, ignore_eol, progress, ignore_comments)))
         parent.children.sort(key=_child_key)
     for anc in reversed(chain):  # de dentro hacia fuera
         le, re_ = _entry(left_root, anc.rel), _entry(right_root, anc.rel)
